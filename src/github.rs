@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use std::path::Path;
+use std::time::Duration;
 use tokio::fs;
 
 #[derive(Debug)]
@@ -77,10 +78,11 @@ impl GitHubPath {
     }
 }
 
-fn get_gh_token() -> Result<String> {
-    let output = std::process::Command::new("gh")
+async fn get_gh_token() -> Result<String> {
+    let output = tokio::process::Command::new("gh")
         .args(["auth", "token"])
         .output()
+        .await
         .context(
             "Failed to run 'gh auth token'. Please install GitHub CLI and run 'gh auth login'",
         )?;
@@ -102,7 +104,7 @@ fn get_gh_token() -> Result<String> {
 }
 
 pub async fn download_skill(github_path: &GitHubPath, dest: &Path) -> Result<()> {
-    let token = get_gh_token()?;
+    let token = get_gh_token().await?;
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
@@ -115,6 +117,8 @@ pub async fn download_skill(github_path: &GitHubPath, dest: &Path) -> Result<()>
     let client = Client::builder()
         .user_agent("skill-installer")
         .default_headers(headers)
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
         .build()
         .context("Failed to create HTTP client")?;
 

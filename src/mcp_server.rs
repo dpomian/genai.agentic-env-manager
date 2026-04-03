@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
@@ -10,6 +12,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::installer;
+use crate::skill;
 
 #[derive(Clone)]
 pub struct SkillInstallerMcpServer {
@@ -20,6 +23,12 @@ pub struct SkillInstallerMcpServer {
 pub struct InstallSkillParams {
     /// Local path or GitHub URL (e.g., ./my-skill or https://github.com/owner/repo/tree/branch/path/to/skill)
     pub source: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ValidateSkillParams {
+    /// Absolute path to the skill folder to validate
+    pub skill_path: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -50,11 +59,33 @@ impl SkillInstallerMcpServer {
         &self,
         params: Parameters<InstallSkillParams>,
     ) -> Result<CallToolResult, McpError> {
+        tracing::info!("Installing skill from source: {}", params.0.source);
+
         let skill_name = installer::install_from_source(&params.0.source)
             .await
-            .map_err(|e| McpError::internal_error(format!("Installation failed: {}", e), None))?;
+            .map_err(|e| {
+                tracing::error!("Installation failed: {:?}", e);
+                McpError::internal_error(format!("Installation failed: {}", e), None)
+            })?;
 
+        tracing::info!("Skill '{}' installed successfully", skill_name);
         let content = Content::text(format!("Skill '{}' installed successfully", skill_name));
+        Ok(CallToolResult::success(vec![content]))
+    }
+
+    #[tool(
+        description = "Validate that a path contains a valid agent skill (checks for skill.md or SKILL.md marker file)"
+    )]
+    async fn validate_skill(
+        &self,
+        params: Parameters<ValidateSkillParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let skill_path = PathBuf::from(&params.0.skill_path);
+
+        let canonical_path = skill::validate(&skill_path)
+            .map_err(|e| McpError::invalid_params(format!("Validation failed: {}", e), None))?;
+
+        let content = Content::text(format!("Skill at '{}' is valid", canonical_path.display()));
         Ok(CallToolResult::success(vec![content]))
     }
 
@@ -105,6 +136,7 @@ impl ServerHandler for SkillInstallerMcpServer {
                 "Skill Installer MCP Server. Install agent skills to multiple AI coding assistants. \
                 Available tools: \
                 - install_skill: Install a skill from a local path or GitHub URL \
+                - validate_skill: Validate that a path contains a valid skill \
                 - uninstall_skill: Uninstall a skill by name \
                 - list_skills: List all installed skills with optional frontmatter"
                     .to_string(),

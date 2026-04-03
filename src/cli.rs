@@ -17,7 +17,6 @@ pub enum Command {
     /// Uninstall a skill by name
     Uninstall {
         /// Name of the skill to uninstall
-        #[arg(long)]
         name: String,
     },
     /// List installed skills

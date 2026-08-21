@@ -92,8 +92,8 @@ fn install_in_home_at(
 ) -> Result<()> {
     let skill_path = &skill::validate(skill_path)?;
 
-    // Resolve targets before copying anything so an unknown --coding-agent
-    // aborts without leaving a partially installed skill behind.
+    // Resolve targets before copying anything so an unknown --agent aborts
+    // without leaving a partially installed skill behind.
     let config = Config::load()?;
     let targets = config.resolve(selection)?;
 
@@ -161,8 +161,9 @@ fn install_in_home_at(
 /// `<workspace>/<agent dir>/<name>` and no symlink is created, so the project
 /// directory is self-contained.
 ///
-/// A project-level install always targets exactly one coding agent, so
-/// `AgentSelection::All` is rejected here.
+/// Every target agent has to be named explicitly, so a project only ever gets
+/// directories for the tools it actually uses. `AgentSelection::All` is
+/// rejected here.
 fn install_in_workspace(
     skill_path: &Path,
     selection: &AgentSelection,
@@ -172,37 +173,43 @@ fn install_in_workspace(
     let workspace = canonical_workspace(workspace)?;
 
     let config = Config::load()?;
-    let AgentSelection::One(coding_agent) = selection else {
+    let AgentSelection::Named(names) = selection else {
         return Err(config.all_agents_in_workspace_error());
     };
-    let target = config.resolve_one_in_workspace(coding_agent, &workspace)?;
+    // Resolve every target up front so an unknown agent aborts before any of
+    // them is written to.
+    let targets = config.resolve_named_in_workspace(names, &workspace)?;
 
     let skill_name = skill_path
         .file_name()
         .context("skill path has no directory name")?;
 
-    fs::create_dir_all(&target.dir)
-        .with_context(|| format!("failed to create directory '{}'", target.dir.display()))?;
+    for target in &targets {
+        fs::create_dir_all(&target.dir)
+            .with_context(|| format!("failed to create directory '{}'", target.dir.display()))?;
 
-    let dest = target.dir.join(skill_name);
+        let dest = target.dir.join(skill_name);
 
-    // Guard against wiping the source when re-installing a skill that already
-    // lives at the destination.
-    if fs::canonicalize(&dest).is_ok_and(|p| p == *skill_path) {
-        bail!(
-            "skill source and destination are the same path ('{}')",
-            dest.display()
-        );
+        // Guard against wiping the source when re-installing a skill that
+        // already lives at the destination.
+        if fs::canonicalize(&dest).is_ok_and(|p| p == *skill_path) {
+            bail!(
+                "skill source and destination are the same path ('{}')",
+                dest.display()
+            );
+        }
+
+        if dest.exists() || dest.is_symlink() {
+            fs::remove_file(&dest)
+                .or_else(|_| fs::remove_dir_all(&dest))
+                .with_context(|| {
+                    format!("failed to remove existing entry at '{}'", dest.display())
+                })?;
+        }
+
+        copy_dir_recursive(skill_path, &dest)?;
+        println!("Installed {} for {}", dest.display(), target.name);
     }
-
-    if dest.exists() || dest.is_symlink() {
-        fs::remove_file(&dest)
-            .or_else(|_| fs::remove_dir_all(&dest))
-            .with_context(|| format!("failed to remove existing entry at '{}'", dest.display()))?;
-    }
-
-    copy_dir_recursive(skill_path, &dest)?;
-    println!("Installed {} for {}", dest.display(), target.name);
 
     Ok(())
 }
@@ -637,7 +644,7 @@ mod tests {
     }
 
     fn one(name: &str) -> AgentSelection {
-        AgentSelection::One(name.to_string())
+        AgentSelection::one(name)
     }
 
     /// Points `Config::load` at a config whose agent directories are absolute
@@ -656,6 +663,20 @@ mod tests {
         std::env::set_var(config::CONFIG_ENV_VAR, &config_path);
 
         (guard, root.join("agents/skills"))
+    }
+
+    #[test]
+    fn home_install_for_several_named_agents_links_both_to_one_copy() {
+        let root = temp_dir("home-multi-agent");
+        let (_env, shared) = use_absolute_config(&root);
+        let skill = make_skill(&root, "demo");
+
+        let selection = AgentSelection::named(["kiro".to_string(), "claude".to_string()]);
+        install_in_home_at(&skill, &selection, &shared).unwrap();
+
+        assert!(shared.join("demo").is_dir());
+        assert!(root.join(".kiro/skills/demo").is_symlink());
+        assert!(root.join(".claude/skills/demo").is_symlink());
     }
 
     #[test]
@@ -813,6 +834,26 @@ mod tests {
     }
 
     #[test]
+    fn workspace_install_copies_into_every_named_agent_directory() {
+        let root = temp_dir("multi-agent-workspace");
+        let _env = use_test_config(&root);
+        let skill = make_skill(&root, "demo");
+        let workspace = root.join("project");
+        fs::create_dir_all(&workspace).unwrap();
+
+        let selection = AgentSelection::named(["kiro".to_string(), "claude".to_string()]);
+        install(&skill, &selection, Some(&workspace)).unwrap();
+
+        // Each agent gets its own self-contained copy, no symlinks.
+        for agent_dir in [".kiro/skills/demo", ".claude/skills/demo"] {
+            let dest = workspace.join(agent_dir);
+            assert!(dest.is_dir(), "{} should exist", dest.display());
+            assert!(!dest.is_symlink(), "{} should be a copy", dest.display());
+            assert!(dest.join("SKILL.md").is_file());
+        }
+    }
+
+    #[test]
     fn workspace_install_rejects_all_agents() {
         let root = temp_dir("all-in-workspace");
         let _env = use_test_config(&root);
@@ -824,7 +865,7 @@ mod tests {
         let message = format!("{err:#}");
 
         assert!(
-            message.contains("--coding-agent all is not supported with --workspace"),
+            message.contains("--all-agents is not supported with --workspace"),
             "{message}"
         );
         // The message points at the configured agents to choose from.

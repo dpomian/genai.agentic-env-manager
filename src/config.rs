@@ -14,9 +14,9 @@ const CONFIG_RELATIVE_PATH: &str = ".agents/config.yaml";
 /// Written on first run when no config file exists yet.
 const DEFAULT_CONFIG_YAML: &str = r#"# skill-installer configuration
 #
-# Maps a --coding-agent value to the directory where the skill symlink is
-# created. Paths may be relative to your home directory (".kiro/skills"),
-# start with "~/", or be absolute.
+# Maps an --agent value to the directory where the skill symlink is created.
+# Paths may be relative to your home directory (".kiro/skills"), start with
+# "~/", or be absolute.
 #
 # To support a new coding agent / IDE, add an entry here. No rebuild needed.
 coding_agents:
@@ -29,38 +29,87 @@ coding_agents:
 /// A resolved symlink destination for one coding agent.
 #[derive(Debug, Clone)]
 pub struct Target {
-    /// The `--coding-agent` value this target came from.
+    /// The `--agent` value this target came from.
     pub name: String,
     /// Absolute directory in which the skill symlink is created.
     pub dir: PathBuf,
 }
 
-/// The `--coding-agent` value that selects every configured agent.
+/// Legacy `--agent` value that selects every configured agent. Superseded by
+/// `--all-agents`, but still accepted so existing scripts keep working.
 pub const ALL_AGENTS: &str = "all";
 
 /// Which of the configured coding agents an operation targets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSelection {
-    /// Every agent in config.yaml, requested explicitly as `all`.
+    /// Every agent in config.yaml, requested as `--all-agents` (or the legacy
+    /// `--agent all`).
     All,
-    /// A single named agent.
-    One(String),
+    /// One or more explicitly named agents. Never empty, and deduplicated in
+    /// the order the names were given.
+    Named(Vec<String>),
 }
 
 impl AgentSelection {
+    /// Builds a selection from the `--agent` values and the `--all-agents` flag.
+    ///
+    /// `all` is also accepted as an `--agent` value for backwards compatibility.
+    /// No names and no flag means every agent, which read-only commands such as
+    /// `list` rely on for their default; `install` and `uninstall` require a
+    /// selection at the argument-parsing level so they never reach that case.
+    pub fn parse(names: &[String], all: bool) -> Result<Self> {
+        let (all_values, named): (Vec<&String>, Vec<&String>) = names
+            .iter()
+            .partition(|name| name.eq_ignore_ascii_case(ALL_AGENTS));
+
+        let wants_all = all || !all_values.is_empty();
+
+        if wants_all && !named.is_empty() {
+            bail!(
+                "cannot combine every agent with a named one: drop either \
+                 --all-agents / --agent {ALL_AGENTS} or --agent {}",
+                named
+                    .iter()
+                    .map(|n| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" --agent ")
+            );
+        }
+
+        if wants_all || named.is_empty() {
+            return Ok(Self::All);
+        }
+
+        Ok(Self::named(named.into_iter().cloned()))
+    }
+
+    /// A selection of explicitly named agents, deduplicated in input order.
+    /// Falls back to [`Self::All`] when `names` is empty.
+    pub fn named<I: IntoIterator<Item = String>>(names: I) -> Self {
+        let mut unique: Vec<String> = Vec::new();
+        for name in names {
+            if !unique.contains(&name) {
+                unique.push(name);
+            }
+        }
+
+        if unique.is_empty() {
+            return Self::All;
+        }
+
+        Self::Named(unique)
+    }
+
+    /// A selection of exactly one named agent. Production code builds its
+    /// selection from parsed arguments, so this exists for tests.
+    #[cfg(test)]
+    pub fn one(name: impl Into<String>) -> Self {
+        Self::Named(vec![name.into()])
+    }
+
     /// True when every configured agent is targeted.
     pub fn is_all(&self) -> bool {
         matches!(self, Self::All)
-    }
-}
-
-impl From<&str> for AgentSelection {
-    fn from(value: &str) -> Self {
-        if value.eq_ignore_ascii_case(ALL_AGENTS) {
-            Self::All
-        } else {
-            Self::One(value.to_string())
-        }
     }
 }
 
@@ -68,7 +117,7 @@ impl fmt::Display for AgentSelection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::All => f.write_str(ALL_AGENTS),
-            Self::One(name) => f.write_str(name),
+            Self::Named(names) => f.write_str(&names.join(", ")),
         }
     }
 }
@@ -139,15 +188,23 @@ impl Config {
         self.resolve_with(selection, Some(workspace))
     }
 
-    /// Resolves the single workspace target for a named coding agent. Errors if
-    /// the agent is not configured.
-    pub fn resolve_one_in_workspace(&self, coding_agent: &str, workspace: &Path) -> Result<Target> {
-        let dir = self
-            .coding_agents
-            .get(coding_agent)
-            .ok_or_else(|| self.unknown_agent_error(coding_agent))?;
-
-        self.target(coding_agent, dir, Some(workspace))
+    /// Resolves the workspace targets for a selection that names its agents.
+    /// Errors if any of them is not configured.
+    pub fn resolve_named_in_workspace(
+        &self,
+        names: &[String],
+        workspace: &Path,
+    ) -> Result<Vec<Target>> {
+        names
+            .iter()
+            .map(|name| {
+                let dir = self
+                    .coding_agents
+                    .get(name)
+                    .ok_or_else(|| self.unknown_agent_error(name))?;
+                self.target(name, dir, Some(workspace))
+            })
+            .collect()
     }
 
     fn resolve_with(
@@ -156,13 +213,16 @@ impl Config {
         workspace: Option<&Path>,
     ) -> Result<Vec<Target>> {
         match selection {
-            AgentSelection::One(name) => {
-                let dir = self
-                    .coding_agents
-                    .get(name)
-                    .ok_or_else(|| self.unknown_agent_error(name))?;
-                Ok(vec![self.target(name, dir, workspace)?])
-            }
+            AgentSelection::Named(names) => names
+                .iter()
+                .map(|name| {
+                    let dir = self
+                        .coding_agents
+                        .get(name)
+                        .ok_or_else(|| self.unknown_agent_error(name))?;
+                    self.target(name, dir, workspace)
+                })
+                .collect(),
             AgentSelection::All => self
                 .coding_agents
                 .iter()
@@ -229,7 +289,7 @@ impl Config {
         anyhow::anyhow!(
             "unknown coding agent '{name}'\n\n\
              Configured coding agents in {}:\n{}\n\n\
-             Use '{ALL_AGENTS}' to target every configured agent, or add an entry \
+             Use --all-agents to target every configured agent, or add an entry \
              under `coding_agents:` in that file to support a new one.",
             self.path.display(),
             self.configured_agents()
@@ -239,8 +299,8 @@ impl Config {
     /// Error for a project-level install that asked for every agent at once.
     pub fn all_agents_in_workspace_error(&self) -> anyhow::Error {
         anyhow::anyhow!(
-            "--coding-agent {ALL_AGENTS} is not supported with --workspace; \
-             a project-level install targets a single coding agent\n\n\
+            "--all-agents is not supported with --workspace; name the agents you \
+             want so a project only gets directories for the tools it uses\n\n\
              Configured coding agents in {}:\n{}",
             self.path.display(),
             self.configured_agents()
@@ -279,7 +339,11 @@ mod tests {
     }
 
     fn one(name: &str) -> AgentSelection {
-        AgentSelection::One(name.to_string())
+        AgentSelection::one(name)
+    }
+
+    fn values(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
     }
 
     #[test]
@@ -292,6 +356,15 @@ mod tests {
     }
 
     #[test]
+    fn resolves_several_named_agents_in_the_order_given() {
+        let selection = AgentSelection::parse(&values(&["kiro", "claude"]), false).unwrap();
+        let targets = config(YAML).resolve(&selection).unwrap();
+
+        let names: Vec<_> = targets.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["kiro", "claude"]);
+    }
+
+    #[test]
     fn resolves_every_agent_for_all() {
         let targets = config(YAML).resolve(&AgentSelection::All).unwrap();
 
@@ -300,14 +373,68 @@ mod tests {
     }
 
     #[test]
-    fn all_is_parsed_case_insensitively_and_never_treated_as_an_agent_name() {
-        assert_eq!(AgentSelection::from("all"), AgentSelection::All);
-        assert_eq!(AgentSelection::from("ALL"), AgentSelection::All);
-        assert_eq!(AgentSelection::from("kiro"), one("kiro"));
+    fn all_agents_flag_selects_every_agent() {
+        assert_eq!(
+            AgentSelection::parse(&[], true).unwrap(),
+            AgentSelection::All
+        );
+    }
+
+    #[test]
+    fn legacy_all_value_is_still_accepted_case_insensitively() {
+        assert_eq!(
+            AgentSelection::parse(&values(&["all"]), false).unwrap(),
+            AgentSelection::All
+        );
+        assert_eq!(
+            AgentSelection::parse(&values(&["ALL"]), false).unwrap(),
+            AgentSelection::All
+        );
+    }
+
+    #[test]
+    fn no_selection_at_all_means_every_agent() {
+        assert_eq!(
+            AgentSelection::parse(&[], false).unwrap(),
+            AgentSelection::All
+        );
+    }
+
+    #[test]
+    fn named_agents_are_deduplicated_in_input_order() {
+        let selection = AgentSelection::parse(&values(&["kiro", "claude", "kiro"]), false).unwrap();
+
+        assert_eq!(
+            selection,
+            AgentSelection::Named(vec!["kiro".to_string(), "claude".to_string()])
+        );
+    }
+
+    #[test]
+    fn mixing_every_agent_with_a_named_one_is_rejected() {
+        let err = AgentSelection::parse(&values(&["kiro"]), true).unwrap_err();
+        assert!(
+            format!("{err}").contains("cannot combine every agent with a named one"),
+            "{err}"
+        );
+
+        let err = AgentSelection::parse(&values(&["all", "kiro"]), false).unwrap_err();
+        assert!(
+            format!("{err}").contains("cannot combine every agent with a named one"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn selection_reports_and_renders_itself() {
         assert!(AgentSelection::All.is_all());
         assert!(!one("kiro").is_all());
         assert_eq!(AgentSelection::All.to_string(), "all");
         assert_eq!(one("kiro").to_string(), "kiro");
+        assert_eq!(
+            AgentSelection::named(values(&["kiro", "claude"])).to_string(),
+            "kiro, claude"
+        );
     }
 
     #[test]
@@ -318,7 +445,7 @@ mod tests {
         assert!(message.contains("unknown coding agent 'cursor'"), "{message}");
         assert!(message.contains("kiro -> .kiro/skills"), "{message}");
         assert!(message.contains("/tmp/config.yaml"), "{message}");
-        assert!(message.contains("Use 'all'"), "{message}");
+        assert!(message.contains("--all-agents"), "{message}");
     }
 
     #[test]
@@ -342,11 +469,28 @@ mod tests {
 
     #[test]
     fn workspace_targets_are_rooted_at_the_workspace() {
-        let target = config(YAML)
-            .resolve_one_in_workspace("kiro", Path::new("/work/project"))
+        let targets = config(YAML)
+            .resolve_named_in_workspace(&values(&["kiro"]), Path::new("/work/project"))
             .unwrap();
 
-        assert_eq!(target.dir, PathBuf::from("/work/project/.kiro/skills"));
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].dir, PathBuf::from("/work/project/.kiro/skills"));
+    }
+
+    #[test]
+    fn workspace_resolves_several_named_agents() {
+        let targets = config(YAML)
+            .resolve_named_in_workspace(&values(&["kiro", "claude"]), Path::new("/work/project"))
+            .unwrap();
+
+        let dirs: Vec<_> = targets.iter().map(|t| t.dir.clone()).collect();
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/work/project/.kiro/skills"),
+                PathBuf::from("/work/project/.claude/skills"),
+            ]
+        );
     }
 
     #[test]
@@ -384,7 +528,7 @@ mod tests {
     #[test]
     fn workspace_rejects_an_unknown_agent() {
         let err = config(YAML)
-            .resolve_one_in_workspace("cursor", Path::new("/work/project"))
+            .resolve_named_in_workspace(&values(&["cursor"]), Path::new("/work/project"))
             .unwrap_err();
         assert!(format!("{err}").contains("unknown coding agent 'cursor'"));
     }

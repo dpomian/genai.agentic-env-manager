@@ -28,7 +28,7 @@ The skill installer provides two main modes of operation:
 #### Install a Skill
 
 ```bash
-skill-installer install /path/to/skill/directory --coding-agent kiro
+skill-installer install /path/to/skill/directory --agent kiro
 ```
 
 This command:
@@ -37,26 +37,38 @@ This command:
 3. Copies the skill to `~/.agents/skills/<skill-name>`
 4. Creates symlinks in the resolved coding agent directories
 
-`--coding-agent` is **required** and takes either a name from your config file or
-the literal `all`:
+You must say which agents to install for. Either name them with `--agent`
+(short `-a`), repeating the flag for more than one:
 
 ```bash
-skill-installer install /path/to/skill --coding-agent all
+skill-installer install /path/to/skill -a kiro
+skill-installer install /path/to/skill -a kiro -a claude
 ```
 
-`all` targets every configured agent, skipping those whose directory does not
-exist so you don't get directories for tools you don't use. A named agent gets
-its directory created if it is missing. If the value is neither `all` nor an
-entry in `config.yaml`, the tool prints the configured agents and exits with a
-non-zero status without installing anything.
+…or ask for every configured agent with `--all-agents`:
+
+```bash
+skill-installer install /path/to/skill --all-agents
+```
+
+`--all-agents` skips agents whose directory does not exist, so you don't get
+directories for tools you don't use. An agent you name explicitly gets its
+directory created if it is missing. The two forms cannot be combined, and
+omitting both is a usage error — nothing is installed either way. A name that is
+not in `config.yaml` prints the configured agents and exits with a non-zero
+status without installing anything.
+
+> `--agent all` is still accepted as a synonym for `--all-agents`, and
+> `--coding-agent` still works as an alias for `--agent`, so existing scripts
+> keep running. Both are deprecated and hidden from `--help`.
 
 #### Install at Project Level
 
-Pass `--workspace` (short `-w`, also accepted as `--ws`) to install into a
-project instead of your home directory:
+Pass `--workspace` (short `-w`) to install into a project instead of your home
+directory:
 
 ```bash
-skill-installer install /path/to/skill --coding-agent kiro --workspace .
+skill-installer install /path/to/skill -a kiro -w .
 ```
 
 The path is canonicalized, so relative paths like `.` work. The skill is copied
@@ -69,15 +81,22 @@ installs, so `windsurf: .codeium/windsurf/skills` becomes
 `<workspace>/.codeium/windsurf/skills`. An absolute config entry has no
 project-level equivalent and falls back to `<workspace>/.<agent>/skills`.
 
-`--coding-agent` cannot be `all` with `--workspace`: a project-level install
-always targets exactly one agent, and its directory is created if it does not
-exist. Passing `all` is an error and nothing is written.
+You can name several agents for a project-level install, and each gets its own
+self-contained copy:
+
+```bash
+skill-installer install /path/to/skill -a kiro -a claude -w .
+```
+
+`--all-agents` is **not** allowed with `--workspace`, because a project should
+only gain directories for the tools it actually uses. Passing it is an error and
+nothing is written.
 
 `--workspace` also works with `uninstall` and `list`:
 
 ```bash
 skill-installer list --workspace .
-skill-installer uninstall my-skill --coding-agent kiro --workspace .
+skill-installer uninstall my-skill -a kiro -w .
 ```
 
 Project-level and user-level installs are independent: `uninstall --workspace`
@@ -86,23 +105,24 @@ project.
 
 #### Uninstall a Skill
 
-`uninstall` mirrors `install`: `--coding-agent` is required and takes a
-configured name or `all`.
+`uninstall` selects agents exactly like `install`: name them with `--agent`, or
+pass `--all-agents`.
 
 ```bash
-skill-installer uninstall my-skill --coding-agent kiro
-skill-installer uninstall my-skill --coding-agent all
+skill-installer uninstall my-skill -a kiro
+skill-installer uninstall my-skill -a kiro -a claude
+skill-installer uninstall my-skill --all-agents
 ```
 
 Uninstalling a skill that was never installed, or that is not installed for the
-selected agent, is a **no-op**: it reports that there was nothing to do and exits
-zero. An agent that is not in `config.yaml` is still an error.
+selected agents, is a **no-op**: it reports that there was nothing to do and
+exits zero. An agent that is not in `config.yaml` is still an error.
 
 At user level the agent symlinks are removed first, and the shared copy in
 `~/.agents/skills` is removed only once no configured agent links to it any
 more — so uninstalling for one agent cannot leave another with a dangling
 symlink. A copy that nothing points at is reclaimed on the next uninstall.
-Unlike `install`, `--coding-agent all` *is* allowed with `--workspace`, since
+Unlike `install`, `--all-agents` *is* allowed with `--workspace`, since
 uninstalling only removes what is already there and creates no directories.
 
 #### Run as MCP Server
@@ -155,15 +175,20 @@ Or with an absolute path to the binary:
 
 When running as an MCP server, the following tools are available:
 
-- **install_skill**: Install a skill from a local path or GitHub URL. `coding_agent`
-  is required (a configured name or `all`); optional `workspace` mirrors the CLI
-  flag for a project-level install.
-- **validate_skill**: Validate that a path contains a valid skill
-- **uninstall_skill**: Uninstall a skill by name. `coding_agent` is required (a
-  configured name or `all`); optional `workspace` for a project-level uninstall.
-  Not being installed is a no-op.
-- **list_skills**: List installed skills. With `workspace` set, returns the
-  project-level skills broken down per coding agent.
+- **install_skill**: Install a skill from a local path or GitHub URL. Select
+  agents with `agents` (an array of configured names) or `all_agents: true`; one
+  of the two is required. Optional `workspace` mirrors the CLI flag for a
+  project-level install.
+- **validate_skill**: Validate that `source` contains a valid skill
+- **uninstall_skill**: Uninstall a skill by `name`. Selects agents like
+  `install_skill` (`agents` or `all_agents`); optional `workspace` for a
+  project-level uninstall. Not being installed is a no-op.
+- **list_skills**: List installed skills, with optional `frontmatter`. With
+  `workspace` set, returns the project-level skills broken down per coding agent.
+
+The older parameter names still deserialize — `coding_agent` (a single name or
+`"all"`), `skill_path`, and `include_frontmatter` — so existing callers keep
+working, but they are absent from the advertised tool schemas.
 
 ## Configuration
 
@@ -175,7 +200,7 @@ A valid skill directory must contain either:
 
 ### Coding Agents (`~/.agents/config.yaml`)
 
-The mapping from a `--coding-agent` value to the directory that receives the
+The mapping from an `--agent` value to the directory that receives the
 symlink lives in `~/.agents/config.yaml`. The file is created with these
 defaults the first time you install a skill:
 
@@ -196,11 +221,12 @@ coding_agents:
 ```
 
 Behaviour notes:
-- `--coding-agent <name>`: links only into that agent's directory, creating it if
-  it does not exist. An unknown name is an error and nothing is installed.
-- `--coding-agent all`: links into every configured agent, skipping those whose
+- `--agent <name>` (repeatable): links only into the named agents' directories,
+  creating them if they do not exist. An unknown name is an error and nothing is
+  installed.
+- `--all-agents`: links into every configured agent, skipping those whose
   directory does not exist (so you don't get directories for tools you don't use).
-- `install` and `uninstall` both require the flag; `list` defaults to `all`.
+- `install` and `uninstall` require one of the two; `list` defaults to every agent.
 
 Set `SKILL_INSTALLER_CONFIG` to use a config file from another location.
 

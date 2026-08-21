@@ -27,23 +27,23 @@ async fn main() {
 async fn run() -> Result<()> {
     let args = Cli::parse();
 
+    // Every agent-targeting command builds its selection the same way, so the
+    // `--agent` / `--all-agents` rules live in one place.
+    let selection = args.command.agent_selection()?;
+
     match args.command {
         Command::Install {
-            source,
-            coding_agent,
-            workspace,
+            source, workspace, ..
         } => {
-            let selection = AgentSelection::from(coding_agent.as_str());
+            let selection = selection.expect("install targets agents");
             let skill_name =
                 installer::install_from_source(&source, &selection, workspace.as_deref()).await?;
             println!("Skill '{}' installed successfully.", skill_name);
         }
         Command::Uninstall {
-            name,
-            coding_agent,
-            workspace,
+            name, workspace, ..
         } => {
-            let selection = AgentSelection::from(coding_agent.as_str());
+            let selection = selection.expect("uninstall targets agents");
             let report = installer::uninstall(&name, &selection, workspace.as_deref())?;
 
             if report.is_noop() {
@@ -65,22 +65,22 @@ async fn run() -> Result<()> {
         }
         Command::List {
             frontmatter,
-            coding_agent,
             workspace,
+            ..
         } => {
-            let selection = AgentSelection::from(coding_agent.as_str());
+            let selection = selection.expect("list targets agents");
             let agents =
                 installer::list_skills_by_agent(frontmatter, &selection, workspace.as_deref())?;
             let any_skills = agents.iter().any(|a| !a.skills.is_empty());
             if !any_skills {
                 match (&selection, &workspace) {
-                    (AgentSelection::One(name), Some(ws)) => println!(
+                    (AgentSelection::Named(_), Some(ws)) => println!(
                         "No skills installed for coding agent '{}' in {}.",
-                        name,
+                        selection,
                         ws.display()
                     ),
-                    (AgentSelection::One(name), None) => {
-                        println!("No skills installed for coding agent '{}'.", name)
+                    (AgentSelection::Named(_), None) => {
+                        println!("No skills installed for coding agent '{}'.", selection)
                     }
                     (AgentSelection::All, Some(ws)) => {
                         println!("No skills installed in {}.", ws.display())

@@ -407,8 +407,6 @@ pub struct AgentSkills {
     pub skills: Vec<SkillInfo>,
 }
 
-const SKILL_MARKERS: &[&str] = &["skill.md", "SKILL.md"];
-
 /// Lists all installed skills from `~/.agents/skills`
 pub fn list_skills(include_frontmatter: bool) -> Result<Vec<SkillInfo>> {
     let install_dir = agents_skills_dir()?;
@@ -546,32 +544,14 @@ pub fn list_skills_by_agent(
 
 /// Extracts frontmatter from a skill's marker file (skill.md or SKILL.md)
 fn extract_frontmatter(skill_path: &Path) -> Option<String> {
-    for marker in SKILL_MARKERS {
+    for marker in skill::SKILL_MARKERS {
         let marker_path = skill_path.join(marker);
         if marker_path.is_file() {
             if let Ok(content) = fs::read_to_string(&marker_path) {
-                return parse_frontmatter(&content);
+                return skill::parse_frontmatter(&content);
             }
         }
     }
-    None
-}
-
-/// Parses YAML frontmatter from markdown content (between --- delimiters)
-fn parse_frontmatter(content: &str) -> Option<String> {
-    let content = content.trim_start();
-    if !content.starts_with("---") {
-        return None;
-    }
-
-    let after_first = &content[3..];
-    if let Some(end_idx) = after_first.find("\n---") {
-        let frontmatter = after_first[..end_idx].trim();
-        if !frontmatter.is_empty() {
-            return Some(frontmatter.to_string());
-        }
-    }
-
     None
 }
 

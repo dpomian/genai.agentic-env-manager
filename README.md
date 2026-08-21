@@ -140,6 +140,7 @@ so you don't have to retype the URL:
 skill-installer source add anthropic https://github.com/anthropics/skills/tree/main/skills
 skill-installer source list
 skill-installer source show anthropic
+skill-installer source browse anthropic
 skill-installer source remove anthropic
 ```
 
@@ -165,6 +166,46 @@ skill-installer source add anthropic https://github.com/anthropics/skills/tree/m
 ```
 
 Set `SKILL_INSTALLER_SOURCES` to keep the file somewhere else.
+
+#### Browse the Skills in a Source
+
+`source browse` lists what a source actually contains, so you can see the names
+before installing one:
+
+```bash
+skill-installer source browse anthropic
+skill-installer source browse anthropic --frontmatter
+```
+
+Every immediate subdirectory holding a `skill.md` or `SKILL.md` counts as a
+skill. `--frontmatter` additionally fetches each marker file and prints its
+frontmatter block, in the same shape as `list --frontmatter`:
+
+```
+anthropic -> https://github.com/anthropics/skills/tree/main/skills
+
+  - pdf
+    Frontmatter:
+      name: pdf
+      description: ...
+
+19 skills found. Install one with `skill-installer install anthropic:<name> --agent <agent>`.
+```
+
+A GitHub URL can be browsed without saving it first, which is useful for deciding
+whether a source is worth keeping:
+
+```bash
+skill-installer source browse https://github.com/anthropics/skills/tree/main/skills
+```
+
+Subdirectories with no skill marker are reported as skipped rather than silently
+dropped, so a source pointing one level too high is obvious. A source that points
+at a single skill instead of a directory of them says so. `browse` also answers to
+`skills`.
+
+Listing costs one GitHub API request per subdirectory, and two with
+`--frontmatter`; up to 8 run at a time.
 
 #### Install from a Saved Source
 

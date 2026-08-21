@@ -137,6 +137,16 @@ pub enum SourceCommand {
         /// Name of the source to show
         name: String,
     },
+    /// List the skills available in a source
+    #[command(alias = "skills")]
+    Browse {
+        /// Name of a saved source, or a GitHub directory URL to browse without
+        /// saving it first
+        name: String,
+        /// Include frontmatter from each skill's skill.md
+        #[arg(long, default_value_t = false)]
+        frontmatter: bool,
+    },
 }
 
 impl Command {
@@ -349,5 +359,43 @@ mod tests {
     fn source_targets_no_agents() {
         let cli = parse(&["source", "list"]).expect("arguments should parse");
         assert!(cli.command.agent_selection().unwrap().is_none());
+    }
+
+    #[test]
+    fn source_browse_takes_a_name_and_optional_frontmatter() {
+        let Command::Source {
+            action: SourceCommand::Browse { name, frontmatter },
+        } = parse(&["source", "browse", "anthropic"]).unwrap().command
+        else {
+            panic!("expected a source browse command");
+        };
+        assert_eq!(name, "anthropic");
+        assert!(!frontmatter);
+
+        let Command::Source {
+            action: SourceCommand::Browse { frontmatter, .. },
+        } = parse(&["source", "browse", "anthropic", "--frontmatter"])
+            .unwrap()
+            .command
+        else {
+            panic!("expected a source browse command");
+        };
+        assert!(frontmatter);
+    }
+
+    #[test]
+    fn source_browse_accepts_a_url_and_has_an_alias() {
+        let Command::Source {
+            action: SourceCommand::Browse { name, .. },
+        } = parse(&["source", "skills", URL]).unwrap().command
+        else {
+            panic!("expected a source browse command");
+        };
+        assert_eq!(name, URL);
+    }
+
+    #[test]
+    fn source_browse_requires_a_name() {
+        assert!(parse(&["source", "browse"]).is_err());
     }
 }

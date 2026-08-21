@@ -110,7 +110,7 @@ async fn run() -> Result<()> {
                 }
             }
         }
-        Command::Source { action } => run_source(action)?,
+        Command::Source { action } => run_source(action).await?,
         Command::Serve => {
             tracing_subscriber::fmt()
                 .with_env_filter(
@@ -138,7 +138,7 @@ async fn run() -> Result<()> {
 
 /// Handles the `source` subcommands. Loads `~/.agents/sources.yaml`, applies the
 /// change, and writes it back only for the operations that mutate it.
-fn run_source(action: SourceCommand) -> Result<()> {
+async fn run_source(action: SourceCommand) -> Result<()> {
     match action {
         SourceCommand::Add { name, url, force } => {
             let mut sources = Sources::load()?;
@@ -197,6 +197,72 @@ fn run_source(action: SourceCommand) -> Result<()> {
                     );
                 }
                 Err(err) => println!("  error:  not a usable GitHub URL: {err:#}"),
+            }
+        }
+        SourceCommand::Browse { name, frontmatter } => {
+            // A URL browses directly, so a source can be inspected before it is
+            // worth saving. `saved_as` is None in that case.
+            let (saved_as, url) = if name.starts_with("https://") || name.starts_with("http://") {
+                (None, name.clone())
+            } else {
+                (Some(name.clone()), Sources::load()?.get(&name)?.to_string())
+            };
+
+            let base = GitHubPath::parse(&url)?;
+            let listing = github::list_skills(&base, frontmatter).await?;
+
+            match &saved_as {
+                Some(name) => println!("{name} -> {url}"),
+                None => println!("{url}"),
+            }
+            println!();
+
+            if listing.skills.is_empty() {
+                if listing.is_skill {
+                    println!(
+                        "This source is a single skill, not a directory of skills, so there \
+                         is nothing to browse.\nInstall it with its URL."
+                    );
+                } else {
+                    println!("No skills found here (no subdirectory has a skill.md or SKILL.md).");
+                }
+            } else {
+                for skill in &listing.skills {
+                    println!("  - {}", skill.name);
+                    if let Some(fm) = &skill.frontmatter {
+                        println!("    Frontmatter:");
+                        for line in fm.lines() {
+                            println!("      {line}");
+                        }
+                    }
+                }
+
+                // A saved source installs by reference; a browsed URL installs by
+                // extending that URL.
+                let install_arg = match &saved_as {
+                    Some(name) => format!("{name}:<name>"),
+                    None => format!("{}/<name>", url.trim_end_matches('/')),
+                };
+
+                println!();
+                println!(
+                    "{} skill{} found. Install one with `skill-installer install {install_arg} \
+                     --agent <agent>`.",
+                    listing.skills.len(),
+                    if listing.skills.len() == 1 { "" } else { "s" },
+                );
+            }
+
+            // When the source is one skill, its subdirectories are that skill's
+            // own content, so listing them as "skipped" would be noise.
+            if !listing.skipped.is_empty() && !(listing.is_skill && listing.skills.is_empty()) {
+                println!();
+                println!(
+                    "Skipped {} subdirector{} without a skill marker: {}",
+                    listing.skipped.len(),
+                    if listing.skipped.len() == 1 { "y" } else { "ies" },
+                    listing.skipped.join(", ")
+                );
             }
         }
     }

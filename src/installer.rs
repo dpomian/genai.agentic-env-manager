@@ -462,10 +462,7 @@ pub fn list_skills_by_agent(
             let workspace = canonical_workspace(workspace)?;
             (config.resolve_in_workspace(selection, &workspace)?, None)
         }
-        None => (
-            config.resolve(selection)?,
-            Some(agents_skills_dir()?),
-        ),
+        None => (config.resolve(selection)?, Some(agents_skills_dir()?)),
     };
 
     let mut result = Vec::new();
@@ -474,9 +471,9 @@ pub fn list_skills_by_agent(
         let mut skills: Vec<SkillInfo> = Vec::new();
 
         if target.dir.is_dir() {
-            for entry in fs::read_dir(&target.dir).with_context(|| {
-                format!("failed to read directory '{}'", target.dir.display())
-            })? {
+            for entry in fs::read_dir(&target.dir)
+                .with_context(|| format!("failed to read directory '{}'", target.dir.display()))?
+            {
                 let entry = entry?;
                 let entry_path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -610,7 +607,9 @@ mod tests {
     fn lock_env() -> MutexGuard<'static, ()> {
         // Poisoning only means some other test failed; the env var is still
         // ours to overwrite.
-        ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Creates a unique temp directory for one test case.
@@ -740,8 +739,7 @@ mod tests {
         assert!(root.join(".claude/skills/demo").is_symlink());
 
         let config = Config::load().unwrap();
-        let report =
-            uninstall_in_home_at("demo", &AgentSelection::All, &config, &shared).unwrap();
+        let report = uninstall_in_home_at("demo", &AgentSelection::All, &config, &shared).unwrap();
 
         assert_eq!(report.removed_from, vec!["claude", "kiro"]);
         assert!(report.removed_copy);
@@ -811,6 +809,39 @@ mod tests {
         );
         // The other configured agent was not requested.
         assert!(!workspace.join(".claude").exists());
+    }
+
+    #[test]
+    fn workspace_install_honours_a_separate_workspace_path() {
+        let root = temp_dir("split-paths");
+        let guard = lock_env();
+        let config_path = root.join("config.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "coding_agents:\n  kiro:\n    global: {}/.kiro/skills\n    workspace: tools/kiro/skills\n",
+                root.display()
+            ),
+        )
+        .unwrap();
+        std::env::set_var(config::CONFIG_ENV_VAR, &config_path);
+        let _env = guard;
+
+        let skill = make_skill(&root, "demo");
+        let workspace = root.join("project");
+        fs::create_dir_all(&workspace).unwrap();
+
+        install(&skill, &one("kiro"), Some(&workspace)).unwrap();
+
+        assert!(workspace.join("tools/kiro/skills/demo/SKILL.md").is_file());
+        // The global path is not used for a project-level install.
+        assert!(!workspace.join(".kiro").exists());
+        assert!(!root.join(".kiro/skills/demo").exists());
+
+        // And the same config uninstalls from the workspace path.
+        let report = uninstall("demo", &one("kiro"), Some(&workspace)).unwrap();
+        assert_eq!(report.removed_from, vec!["kiro"]);
+        assert!(!workspace.join("tools/kiro/skills/demo").exists());
     }
 
     #[test]
@@ -899,7 +930,10 @@ mod tests {
         let skill = make_skill(&root, "demo");
 
         let err = install(&skill, &one("kiro"), Some(&root.join("nope"))).unwrap_err();
-        assert!(format!("{err:#}").contains("invalid workspace path"), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("invalid workspace path"),
+            "{err:#}"
+        );
     }
 
     #[test]
@@ -1004,15 +1038,16 @@ mod tests {
 
         install(&skill, &one("kiro"), Some(&workspace)).unwrap();
 
-        let agents =
-            list_skills_by_agent(true, &AgentSelection::All, Some(&workspace)).unwrap();
+        let agents = list_skills_by_agent(true, &AgentSelection::All, Some(&workspace)).unwrap();
 
         let kiro = agents.iter().find(|a| a.agent_name == "kiro").unwrap();
         assert_eq!(kiro.skills.len(), 1);
         assert_eq!(kiro.skills[0].name, "demo");
         assert_eq!(
             kiro.skills[0].path,
-            fs::canonicalize(&workspace).unwrap().join(".kiro/skills/demo")
+            fs::canonicalize(&workspace)
+                .unwrap()
+                .join(".kiro/skills/demo")
         );
         assert_eq!(kiro.skills[0].frontmatter.as_deref(), Some("name: demo"));
 

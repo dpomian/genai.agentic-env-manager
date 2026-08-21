@@ -79,7 +79,9 @@ self-contained and can be committed or shared.
 The subdirectory comes from the same `config.yaml` mapping used for user-level
 installs, so `windsurf: .codeium/windsurf/skills` becomes
 `<workspace>/.codeium/windsurf/skills`. An absolute config entry has no
-project-level equivalent and falls back to `<workspace>/.<agent>/skills`.
+project-level equivalent and falls back to `<workspace>/.<agent>/skills`. An
+agent whose project layout differs from its home layout can configure a separate
+`workspace` path — see [Per-scope paths](#per-scope-paths).
 
 You can name several agents for a project-level install, and each gets its own
 self-contained copy:
@@ -200,9 +202,9 @@ A valid skill directory must contain either:
 
 ### Coding Agents (`~/.agents/config.yaml`)
 
-The mapping from an `--agent` value to the directory that receives the
-symlink lives in `~/.agents/config.yaml`. The file is created with these
-defaults the first time you install a skill:
+The mapping from an `--agent` value to the directory that receives the skill
+lives in `~/.agents/config.yaml`. The file is created with these defaults the
+first time you install a skill:
 
 ```yaml
 coding_agents:
@@ -212,13 +214,44 @@ coding_agents:
   claude: .claude/skills
 ```
 
-Paths are relative to your home directory, or may start with `~/`, or be
-absolute. To support a new IDE, add an entry — no rebuild required:
+A single path is used for both scopes: resolved against your home directory for
+a user-level install, and against the project root for a `--workspace` install.
+It may also start with `~/`, or be absolute. To support a new IDE, add an entry —
+no rebuild required:
 
 ```yaml
 coding_agents:
   cursor: .cursor/skills
 ```
+
+#### Per-scope paths
+
+An agent whose user-level and project-level directories differ can spell them
+out instead of giving one path:
+
+```yaml
+coding_agents:
+  windsurf:
+    global: .codeium/windsurf/skills
+    workspace: .windsurf/skills
+```
+
+- `global` behaves exactly like the single-path form: relative to your home
+  directory, `~/`-prefixed, or absolute. It is used for user-level installs.
+- `workspace` is always relative to the project root and is used for
+  `--workspace` installs. An absolute or `~/` value is a config error.
+- Omitting `workspace` reuses `global`, so `kiro: .kiro/skills` and
+
+  ```yaml
+  kiro:
+    global: .kiro/skills
+  ```
+
+  behave identically. An entry with no `global` path is a config error.
+
+When `workspace` is omitted and `global` is absolute, there is no meaningful
+project-level equivalent, so `--workspace` falls back to
+`<workspace>/.<agent>/skills`. Give an explicit `workspace` path to control that.
 
 Behaviour notes:
 - `--agent <name>` (repeatable): links only into the named agents' directories,

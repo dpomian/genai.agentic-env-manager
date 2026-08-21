@@ -14,9 +14,25 @@ const CONFIG_RELATIVE_PATH: &str = ".agents/config.yaml";
 /// Written on first run when no config file exists yet.
 const DEFAULT_CONFIG_YAML: &str = r#"# skill-installer configuration
 #
-# Maps an --agent value to the directory where the skill symlink is created.
-# Paths may be relative to your home directory (".kiro/skills"), start with
-# "~/", or be absolute.
+# Maps an --agent value to the directory that receives the skill.
+#
+# A single path is used for both scopes:
+#
+#   kiro: .kiro/skills
+#
+# It is resolved against your home directory for a user-level install, and
+# against the project root for a --workspace install. It may also start with
+# "~/", or be absolute (an absolute path has no project-level equivalent, so
+# --workspace falls back to "<workspace>/.<agent>/skills").
+#
+# An agent whose two scopes differ can spell them out instead:
+#
+#   windsurf:
+#     global: .codeium/windsurf/skills
+#     workspace: .windsurf/skills
+#
+# `global` behaves like the single-path form; `workspace` is always relative to
+# the project root. Omitting `workspace` reuses `global`.
 #
 # To support a new coding agent / IDE, add an entry here. No rebuild needed.
 coding_agents:
@@ -122,12 +138,43 @@ impl fmt::Display for AgentSelection {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// The directories configured for one coding agent, one per install scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentPaths {
+    /// Directory for a user-level install, relative to the home directory
+    /// (or `~/`-prefixed, or absolute).
+    pub global: String,
+    /// Directory for a project-level install, relative to the workspace root.
+    /// `None` means the global path is reused, which is what a single-path
+    /// config entry gives.
+    pub workspace: Option<String>,
+}
+
+/// A `coding_agents` entry as written in the YAML: either a single path used
+/// for both scopes, or a per-scope mapping.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawAgentPaths {
+    /// `kiro: .kiro/skills`
+    Shared(String),
+    /// `kiro: {global: ..., workspace: ...}`
+    Split {
+        global: Option<String>,
+        workspace: Option<String>,
+    },
+}
+
+/// The config file exactly as parsed, before per-agent validation.
+#[derive(Debug, Deserialize)]
+struct RawConfig {
+    coding_agents: BTreeMap<String, RawAgentPaths>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Config {
-    /// Maps coding agent name -> symlink directory.
-    pub coding_agents: BTreeMap<String, String>,
+    /// Maps coding agent name -> the directories for each install scope.
+    pub coding_agents: BTreeMap<String, AgentPaths>,
     /// Where this config was read from. Not part of the YAML.
-    #[serde(skip)]
     pub path: PathBuf,
 }
 
@@ -155,11 +202,10 @@ impl Config {
 
     /// Parses a config from YAML. `path` is recorded for error messages.
     pub fn from_yaml(raw: &str, path: &Path) -> Result<Self> {
-        let mut config: Config = serde_yaml::from_str(raw)
+        let raw_config: RawConfig = serde_yaml::from_str(raw)
             .with_context(|| format!("failed to parse config '{}'", path.display()))?;
-        config.path = path.to_path_buf();
 
-        if config.coding_agents.is_empty() {
+        if raw_config.coding_agents.is_empty() {
             bail!(
                 "no coding agents configured in '{}'\n\n\
                  Add at least one entry under `coding_agents:`, for example:\n\
@@ -169,7 +215,64 @@ impl Config {
             );
         }
 
-        Ok(config)
+        let coding_agents = raw_config
+            .coding_agents
+            .into_iter()
+            .map(|(name, raw)| Ok((name.clone(), Self::agent_paths(&name, raw, path)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+
+        Ok(Config {
+            coding_agents,
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// Validates one `coding_agents` entry and normalizes it to [`AgentPaths`].
+    fn agent_paths(name: &str, raw: RawAgentPaths, path: &Path) -> Result<AgentPaths> {
+        let (global, workspace) = match raw {
+            RawAgentPaths::Shared(global) => (Some(global), None),
+            RawAgentPaths::Split { global, workspace } => (global, workspace),
+        };
+
+        let global = Self::non_empty(global, name, "global", path)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "coding agent '{name}' in '{}' has no install path\n\n\
+                 Give it a single path used for both scopes:\n\
+                 \x20 {name}: .{name}/skills\n\n\
+                 …or one path per scope:\n\
+                 \x20 {name}:\n\
+                 \x20   global: .{name}/skills\n\
+                 \x20   workspace: .{name}/skills",
+                path.display()
+            )
+        })?;
+
+        let workspace = Self::non_empty(workspace, name, "workspace", path)?;
+
+        Ok(AgentPaths { global, workspace })
+    }
+
+    /// Trims a configured path, rejecting one that is present but blank.
+    fn non_empty(
+        dir: Option<String>,
+        name: &str,
+        scope: &str,
+        path: &Path,
+    ) -> Result<Option<String>> {
+        let Some(dir) = dir else {
+            return Ok(None);
+        };
+
+        let dir = dir.trim();
+        if dir.is_empty() {
+            bail!(
+                "empty {scope} path configured for coding agent '{name}' in '{}'; \
+                 every configured path needs a directory",
+                path.display()
+            );
+        }
+
+        Ok(Some(dir.to_string()))
     }
 
     /// Resolves which home-level directories to link into.
@@ -198,11 +301,11 @@ impl Config {
         names
             .iter()
             .map(|name| {
-                let dir = self
+                let paths = self
                     .coding_agents
                     .get(name)
                     .ok_or_else(|| self.unknown_agent_error(name))?;
-                self.target(name, dir, Some(workspace))
+                self.target(name, paths, Some(workspace))
             })
             .collect()
     }
@@ -216,25 +319,25 @@ impl Config {
             AgentSelection::Named(names) => names
                 .iter()
                 .map(|name| {
-                    let dir = self
+                    let paths = self
                         .coding_agents
                         .get(name)
                         .ok_or_else(|| self.unknown_agent_error(name))?;
-                    self.target(name, dir, workspace)
+                    self.target(name, paths, workspace)
                 })
                 .collect(),
             AgentSelection::All => self
                 .coding_agents
                 .iter()
-                .map(|(name, dir)| self.target(name, dir, workspace))
+                .map(|(name, paths)| self.target(name, paths, workspace))
                 .collect(),
         }
     }
 
-    fn target(&self, name: &str, dir: &str, workspace: Option<&Path>) -> Result<Target> {
+    fn target(&self, name: &str, paths: &AgentPaths, workspace: Option<&Path>) -> Result<Target> {
         let dir = match workspace {
-            Some(workspace) => self.workspace_dir(name, dir, workspace)?,
-            None => self.absolute_dir(dir)?,
+            Some(workspace) => self.workspace_dir(name, paths, workspace)?,
+            None => self.absolute_dir(&paths.global)?,
         };
 
         Ok(Target {
@@ -243,14 +346,30 @@ impl Config {
         })
     }
 
-    /// Maps a configured agent directory into a workspace.
+    /// Maps an agent's configured directory into a workspace.
     ///
-    /// Home-relative entries (".kiro/skills") are reused as-is under the
-    /// workspace, and a leading "~/" is stripped. An absolute entry has no
-    /// meaningful project-level equivalent, so it falls back to
-    /// `<workspace>/.<agent>/skills`.
-    fn workspace_dir(&self, name: &str, dir: &str, workspace: &Path) -> Result<PathBuf> {
-        let relative = self.relative_dir(dir)?;
+    /// An explicit `workspace:` entry is always relative to the project root, so
+    /// an absolute one (or a `~/` one) is a config error rather than something
+    /// to reinterpret.
+    ///
+    /// Without one, the global path is reused: home-relative entries
+    /// (".kiro/skills") apply as-is under the workspace and a leading "~/" is
+    /// stripped, while an absolute entry has no meaningful project-level
+    /// equivalent and falls back to `<workspace>/.<agent>/skills`.
+    fn workspace_dir(&self, name: &str, paths: &AgentPaths, workspace: &Path) -> Result<PathBuf> {
+        if let Some(dir) = &paths.workspace {
+            if dir.starts_with('~') || Path::new(dir).is_absolute() {
+                bail!(
+                    "workspace path '{dir}' configured for coding agent '{name}' in \
+                     '{}' must be relative to the project root",
+                    self.path.display()
+                );
+            }
+
+            return Ok(workspace.join(dir));
+        }
+
+        let relative = relative_dir(&paths.global);
 
         if Path::new(&relative).is_absolute() {
             return Ok(workspace.join(format!(".{name}")).join("skills"));
@@ -261,7 +380,7 @@ impl Config {
 
     /// Expands `~/` and home-relative paths into absolute ones.
     fn absolute_dir(&self, dir: &str) -> Result<PathBuf> {
-        let relative = self.relative_dir(dir)?;
+        let relative = relative_dir(dir);
 
         let path = Path::new(&relative);
         if path.is_absolute() {
@@ -269,20 +388,6 @@ impl Config {
         }
 
         Ok(home_dir()?.join(relative))
-    }
-
-    /// Trims a configured directory and strips a leading `~/`, leaving either a
-    /// relative path or an absolute one.
-    fn relative_dir(&self, dir: &str) -> Result<String> {
-        let dir = dir.trim();
-        if dir.is_empty() {
-            bail!(
-                "empty directory configured in '{}'; every coding agent needs a path",
-                self.path.display()
-            );
-        }
-
-        Ok(dir.strip_prefix("~/").unwrap_or(dir).to_string())
     }
 
     fn unknown_agent_error(&self, name: &str) -> anyhow::Error {
@@ -308,10 +413,16 @@ impl Config {
     }
 
     /// The configured agents, one `name -> dir` per line, for error messages.
+    /// An agent with a distinct project-level path shows both.
     fn configured_agents(&self) -> String {
         self.coding_agents
             .iter()
-            .map(|(agent, dir)| format!("  {agent} -> {dir}"))
+            .map(|(agent, paths)| match &paths.workspace {
+                Some(workspace) => {
+                    format!("  {agent} -> {} (workspace: {workspace})", paths.global)
+                }
+                None => format!("  {agent} -> {}", paths.global),
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -322,6 +433,13 @@ impl Config {
         }
         Ok(home_dir()?.join(CONFIG_RELATIVE_PATH))
     }
+}
+
+/// Strips a leading `~/` from a configured directory, leaving either a relative
+/// path or an absolute one. Paths are trimmed and checked for emptiness when the
+/// config is parsed, so nothing can fail here.
+fn relative_dir(dir: &str) -> &str {
+    dir.strip_prefix("~/").unwrap_or(dir)
 }
 
 pub fn home_dir() -> Result<PathBuf> {
@@ -442,7 +560,10 @@ mod tests {
         let err = config(YAML).resolve(&one("cursor")).unwrap_err();
         let message = format!("{err}");
 
-        assert!(message.contains("unknown coding agent 'cursor'"), "{message}");
+        assert!(
+            message.contains("unknown coding agent 'cursor'"),
+            "{message}"
+        );
         assert!(message.contains("kiro -> .kiro/skills"), "{message}");
         assert!(message.contains("/tmp/config.yaml"), "{message}");
         assert!(message.contains("--all-agents"), "{message}");
@@ -454,16 +575,13 @@ mod tests {
 
         let targets = config.resolve(&AgentSelection::All).unwrap();
         assert_eq!(targets[0].dir, PathBuf::from("/opt/skills"));
-        assert_eq!(
-            targets[1].dir,
-            home_dir().unwrap().join("nested/skills")
-        );
+        assert_eq!(targets[1].dir, home_dir().unwrap().join("nested/skills"));
     }
 
     #[test]
     fn empty_mapping_is_rejected() {
-        let err = Config::from_yaml("coding_agents: {}\n", Path::new("/tmp/config.yaml"))
-            .unwrap_err();
+        let err =
+            Config::from_yaml("coding_agents: {}\n", Path::new("/tmp/config.yaml")).unwrap_err();
         assert!(format!("{err}").contains("no coding agents configured"));
     }
 
@@ -519,10 +637,7 @@ mod tests {
 
         // An absolute config entry has no project-level equivalent.
         assert_eq!(targets[0].dir, PathBuf::from("/work/project/.abs/skills"));
-        assert_eq!(
-            targets[1].dir,
-            PathBuf::from("/work/project/nested/skills")
-        );
+        assert_eq!(targets[1].dir, PathBuf::from("/work/project/nested/skills"));
     }
 
     #[test]
@@ -531,6 +646,168 @@ mod tests {
             .resolve_named_in_workspace(&values(&["cursor"]), Path::new("/work/project"))
             .unwrap_err();
         assert!(format!("{err}").contains("unknown coding agent 'cursor'"));
+    }
+
+    const SPLIT_YAML: &str = "coding_agents:\n  \
+        windsurf:\n    \
+          global: .codeium/windsurf/skills\n    \
+          workspace: .windsurf/skills\n";
+
+    #[test]
+    fn a_single_path_is_used_for_both_scopes() {
+        let paths = &config(YAML).coding_agents["kiro"];
+
+        assert_eq!(paths.global, ".kiro/skills");
+        assert_eq!(paths.workspace, None);
+    }
+
+    #[test]
+    fn split_entry_uses_the_global_path_at_user_level() {
+        let targets = config(SPLIT_YAML).resolve(&one("windsurf")).unwrap();
+
+        assert_eq!(
+            targets[0].dir,
+            home_dir().unwrap().join(".codeium/windsurf/skills")
+        );
+    }
+
+    #[test]
+    fn split_entry_uses_the_workspace_path_at_project_level() {
+        let targets = config(SPLIT_YAML)
+            .resolve_named_in_workspace(&values(&["windsurf"]), Path::new("/work/project"))
+            .unwrap();
+
+        assert_eq!(
+            targets[0].dir,
+            PathBuf::from("/work/project/.windsurf/skills")
+        );
+    }
+
+    #[test]
+    fn a_split_entry_may_omit_the_workspace_path_and_reuse_the_global_one() {
+        let config = config("coding_agents:\n  kiro:\n    global: .kiro/skills\n");
+
+        assert_eq!(config.coding_agents["kiro"].workspace, None);
+        assert_eq!(
+            config
+                .resolve_named_in_workspace(&values(&["kiro"]), Path::new("/work/project"))
+                .unwrap()[0]
+                .dir,
+            PathBuf::from("/work/project/.kiro/skills")
+        );
+    }
+
+    #[test]
+    fn an_absolute_global_path_still_pairs_with_an_explicit_workspace_path() {
+        let absolute = config(
+            "coding_agents:\n  vendor:\n    global: /opt/skills\n    workspace: .vendor/skills\n",
+        );
+
+        assert_eq!(
+            absolute.resolve(&one("vendor")).unwrap()[0].dir,
+            PathBuf::from("/opt/skills")
+        );
+        // Without the explicit entry this would fall back to ".vendor/skills"
+        // by coincidence, so use a distinct directory name to prove it is read.
+        let distinct = config(
+            "coding_agents:\n  vendor:\n    global: /opt/skills\n    workspace: tools/skills\n",
+        );
+        assert_eq!(
+            distinct
+                .resolve_named_in_workspace(&values(&["vendor"]), Path::new("/work/project"))
+                .unwrap()[0]
+                .dir,
+            PathBuf::from("/work/project/tools/skills")
+        );
+    }
+
+    #[test]
+    fn an_absolute_workspace_path_is_rejected() {
+        let config = config(
+            "coding_agents:\n  kiro:\n    global: .kiro/skills\n    workspace: /opt/skills\n",
+        );
+
+        let err = config
+            .resolve_named_in_workspace(&values(&["kiro"]), Path::new("/work/project"))
+            .unwrap_err();
+        let message = format!("{err}");
+
+        assert!(
+            message.contains("must be relative to the project root"),
+            "{message}"
+        );
+        assert!(message.contains("coding agent 'kiro'"), "{message}");
+        // The user-level path is unaffected.
+        assert!(config.resolve(&one("kiro")).is_ok());
+    }
+
+    #[test]
+    fn a_tilde_workspace_path_is_rejected() {
+        let err =
+            config("coding_agents:\n  kiro:\n    workspace: ~/skills\n    global: .kiro/skills\n")
+                .resolve_named_in_workspace(&values(&["kiro"]), Path::new("/work/project"))
+                .unwrap_err();
+
+        assert!(
+            format!("{err}").contains("must be relative to the project root"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_entry_without_a_global_path_is_rejected() {
+        let err = Config::from_yaml(
+            "coding_agents:\n  kiro:\n    workspace: .kiro/skills\n",
+            Path::new("/tmp/config.yaml"),
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+
+        assert!(
+            message.contains("coding agent 'kiro' in '/tmp/config.yaml' has no install path"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn blank_paths_are_rejected_when_the_config_is_parsed() {
+        let err = Config::from_yaml(
+            "coding_agents:\n  kiro: '  '\n",
+            Path::new("/tmp/config.yaml"),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("empty global path configured for coding agent 'kiro'"),
+            "{err}"
+        );
+
+        let err = Config::from_yaml(
+            "coding_agents:\n  kiro:\n    global: .kiro/skills\n    workspace: ''\n",
+            Path::new("/tmp/config.yaml"),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("empty workspace path configured for coding agent 'kiro'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn configured_paths_are_trimmed() {
+        let config = config("coding_agents:\n  kiro:\n    global: '  .kiro/skills  '\n");
+
+        assert_eq!(config.coding_agents["kiro"].global, ".kiro/skills");
+    }
+
+    #[test]
+    fn error_listings_show_a_distinct_workspace_path() {
+        let err = config(SPLIT_YAML).resolve(&one("cursor")).unwrap_err();
+        let message = format!("{err}");
+
+        assert!(
+            message.contains("windsurf -> .codeium/windsurf/skills (workspace: .windsurf/skills)"),
+            "{message}"
+        );
     }
 
     #[test]

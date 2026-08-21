@@ -28,13 +28,82 @@ The skill installer provides two main modes of operation:
 #### Install a Skill
 
 ```bash
-skill-installer install --skill /path/to/skill/directory
+skill-installer install /path/to/skill/directory --coding-agent kiro
 ```
 
 This command:
 1. Validates that the skill directory contains a `skill.md` or `SKILL.md` marker file
-2. Copies the skill to `~/.agents/skills/<skill-name>`
-3. Creates symlinks in configured AI assistant directories
+2. Resolves the target coding agent(s) from `~/.agents/config.yaml`
+3. Copies the skill to `~/.agents/skills/<skill-name>`
+4. Creates symlinks in the resolved coding agent directories
+
+`--coding-agent` is **required** and takes either a name from your config file or
+the literal `all`:
+
+```bash
+skill-installer install /path/to/skill --coding-agent all
+```
+
+`all` targets every configured agent, skipping those whose directory does not
+exist so you don't get directories for tools you don't use. A named agent gets
+its directory created if it is missing. If the value is neither `all` nor an
+entry in `config.yaml`, the tool prints the configured agents and exits with a
+non-zero status without installing anything.
+
+#### Install at Project Level
+
+Pass `--workspace` (short `-w`, also accepted as `--ws`) to install into a
+project instead of your home directory:
+
+```bash
+skill-installer install /path/to/skill --coding-agent kiro --workspace .
+```
+
+The path is canonicalized, so relative paths like `.` work. The skill is copied
+directly to `<workspace>/.kiro/skills/<skill-name>` — nothing is written to
+`~/.agents/skills` and **no symlinks are created**, so the project directory is
+self-contained and can be committed or shared.
+
+The subdirectory comes from the same `config.yaml` mapping used for user-level
+installs, so `windsurf: .codeium/windsurf/skills` becomes
+`<workspace>/.codeium/windsurf/skills`. An absolute config entry has no
+project-level equivalent and falls back to `<workspace>/.<agent>/skills`.
+
+`--coding-agent` cannot be `all` with `--workspace`: a project-level install
+always targets exactly one agent, and its directory is created if it does not
+exist. Passing `all` is an error and nothing is written.
+
+`--workspace` also works with `uninstall` and `list`:
+
+```bash
+skill-installer list --workspace .
+skill-installer uninstall my-skill --coding-agent kiro --workspace .
+```
+
+Project-level and user-level installs are independent: `uninstall --workspace`
+never touches `~/.agents/skills`, and `uninstall` without it never touches a
+project.
+
+#### Uninstall a Skill
+
+`uninstall` mirrors `install`: `--coding-agent` is required and takes a
+configured name or `all`.
+
+```bash
+skill-installer uninstall my-skill --coding-agent kiro
+skill-installer uninstall my-skill --coding-agent all
+```
+
+Uninstalling a skill that was never installed, or that is not installed for the
+selected agent, is a **no-op**: it reports that there was nothing to do and exits
+zero. An agent that is not in `config.yaml` is still an error.
+
+At user level the agent symlinks are removed first, and the shared copy in
+`~/.agents/skills` is removed only once no configured agent links to it any
+more — so uninstalling for one agent cannot leave another with a dangling
+symlink. A copy that nothing points at is reclaimed on the next uninstall.
+Unlike `install`, `--coding-agent all` *is* allowed with `--workspace`, since
+uninstalling only removes what is already there and creates no directories.
 
 #### Run as MCP Server
 
@@ -86,8 +155,15 @@ Or with an absolute path to the binary:
 
 When running as an MCP server, the following tools are available:
 
-- **install_skill**: Install a skill from a given absolute path
+- **install_skill**: Install a skill from a local path or GitHub URL. `coding_agent`
+  is required (a configured name or `all`); optional `workspace` mirrors the CLI
+  flag for a project-level install.
 - **validate_skill**: Validate that a path contains a valid skill
+- **uninstall_skill**: Uninstall a skill by name. `coding_agent` is required (a
+  configured name or `all`); optional `workspace` for a project-level uninstall.
+  Not being installed is a no-op.
+- **list_skills**: List installed skills. With `workspace` set, returns the
+  project-level skills broken down per coding agent.
 
 ## Configuration
 
@@ -97,13 +173,36 @@ A valid skill directory must contain either:
 - `skill.md` - Skill documentation file
 - `SKILL.md` - Alternative skill documentation file
 
-### Target Directories
+### Coding Agents (`~/.agents/config.yaml`)
 
-Skills are automatically symlinked to the following directories (if they exist):
-- `~/.kiro/skills`
-- `~/.codeium/windsurf/skills`
-- `~/.copilot/skills`
-- `~/.claude/skills`
+The mapping from a `--coding-agent` value to the directory that receives the
+symlink lives in `~/.agents/config.yaml`. The file is created with these
+defaults the first time you install a skill:
+
+```yaml
+coding_agents:
+  kiro: .kiro/skills
+  windsurf: .codeium/windsurf/skills
+  copilot: .copilot/skills
+  claude: .claude/skills
+```
+
+Paths are relative to your home directory, or may start with `~/`, or be
+absolute. To support a new IDE, add an entry — no rebuild required:
+
+```yaml
+coding_agents:
+  cursor: .cursor/skills
+```
+
+Behaviour notes:
+- `--coding-agent <name>`: links only into that agent's directory, creating it if
+  it does not exist. An unknown name is an error and nothing is installed.
+- `--coding-agent all`: links into every configured agent, skipping those whose
+  directory does not exist (so you don't get directories for tools you don't use).
+- `install` and `uninstall` both require the flag; `list` defaults to `all`.
+
+Set `SKILL_INSTALLER_CONFIG` to use a config file from another location.
 
 ### Logging
 
@@ -118,6 +217,7 @@ skill-installer/
 ├── src/
 │   ├── main.rs          # Application entry point
 │   ├── cli.rs           # Command-line interface definitions
+│   ├── config.rs        # Coding agent mapping loaded from config.yaml
 │   ├── installer.rs     # Core installation logic
 │   ├── skill.rs         # Skill validation functions
 │   └── mcp_server.rs    # MCP server implementation
@@ -143,6 +243,7 @@ skill-installer/
 - **schemars**: JSON schema generation for MCP tool parameters
 - **serde**: Serialization and deserialization framework
 - **serde_json**: JSON support for serde
+- **serde_yaml**: YAML parsing for `config.yaml`
 - **tokio**: Async runtime with full feature set
 - **tracing**: Structured logging framework
 - **tracing-subscriber**: Logging subscriber with environment filter support

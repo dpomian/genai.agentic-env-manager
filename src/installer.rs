@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{self, AgentSelection, Config};
 use crate::github;
 use crate::skill;
+use crate::sources::{SkillReference, Sources};
 
 /// Recursively copies a directory and its contents to `dest`.
 fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
@@ -35,13 +36,8 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Detects if the source is a GitHub URL
-fn is_github_url(source: &str) -> bool {
-    source.starts_with("https://github.com/")
-}
-
-/// Installs a skill from a source (local path or GitHub URL).
-/// Auto-detects whether the source is a GitHub URL or local path.
+/// Installs a skill from a source, which may be a local path, a GitHub URL, or a
+/// `<source>:<skill>` reference into a saved source.
 ///
 /// `selection` names one configured agent or every one of them.
 /// `workspace` installs at project level instead of the home directory.
@@ -50,17 +46,23 @@ pub async fn install_from_source(
     selection: &AgentSelection,
     workspace: Option<&Path>,
 ) -> Result<String> {
-    if is_github_url(source) {
-        install_from_github(source, selection, workspace).await
-    } else {
-        let path = PathBuf::from(source);
-        install(&path, selection, workspace)?;
-        let skill_name = path
-            .file_name()
-            .context("Could not determine skill name from path")?
-            .to_string_lossy()
-            .to_string();
-        Ok(skill_name)
+    match SkillReference::classify(source)? {
+        SkillReference::Url(url) => install_from_github(&url, selection, workspace).await,
+        SkillReference::Source { source, skill } => {
+            let url = Sources::load()?.skill_url(&source, &skill)?;
+            println!("Resolved {source}:{skill} -> {url}");
+            install_from_github(&url, selection, workspace).await
+        }
+        SkillReference::Local(path) => {
+            let path = PathBuf::from(path);
+            install(&path, selection, workspace)?;
+            let skill_name = path
+                .file_name()
+                .context("Could not determine skill name from path")?
+                .to_string_lossy()
+                .to_string();
+            Ok(skill_name)
+        }
     }
 }
 
@@ -244,6 +246,10 @@ impl UninstallReport {
 }
 
 /// Uninstalls a skill from the selected coding agent(s), mirroring `install`.
+///
+/// Takes the installed skill's name. Where a skill was originally fetched from is
+/// deliberately not recorded or considered: once installed, a skill is just a
+/// directory name.
 ///
 /// At project level (`workspace` set) the skill directory is removed from the
 /// selected agent directories in that workspace. At user level the agent

@@ -25,7 +25,10 @@ pub enum Command {
     /// Install a skill from a local path or GitHub URL
     #[command(group = agent_selection_group())]
     Install {
-        /// Local path or GitHub URL (e.g., ./my-skill or https://github.com/owner/repo/tree/branch/path/to/skill)
+        /// Local path, GitHub URL, or <source>:<skill> reference into a saved
+        /// source (e.g. ./my-skill,
+        /// https://github.com/owner/repo/tree/branch/path/to/skill, or
+        /// anthropic:pdf — see `skill-installer source`)
         source: String,
         /// Coding agent to install for, as named in ~/.agents/config.yaml
         /// (e.g. kiro). Repeat to install for several agents at once.
@@ -50,7 +53,8 @@ pub enum Command {
     /// Uninstall a skill by name
     #[command(group = agent_selection_group())]
     Uninstall {
-        /// Name of the skill to uninstall
+        /// Name of the skill to uninstall, as it appears in `list`. Where the
+        /// skill was installed from does not matter.
         name: String,
         /// Coding agent to uninstall from, as named in ~/.agents/config.yaml
         /// (e.g. kiro). Repeat to uninstall from several agents at once. A
@@ -97,6 +101,42 @@ pub enum Command {
     },
     /// Run as an MCP server (stdio transport)
     Serve,
+    /// Manage saved skill sources: GitHub directories that contain skills
+    Source {
+        #[command(subcommand)]
+        action: SourceCommand,
+    },
+}
+
+/// The `source` operations. Sources are saved in `~/.agents/sources.yaml`,
+/// separately from the hand-edited `config.yaml`.
+#[derive(Subcommand)]
+pub enum SourceCommand {
+    /// Save a GitHub directory of skills under a short name
+    Add {
+        /// Short name to save the source as (e.g. anthropic)
+        name: String,
+        /// GitHub directory URL
+        /// (e.g. https://github.com/owner/repo/tree/main/skills)
+        url: String,
+        /// Repoint a name that is already saved instead of failing
+        #[arg(long, action = ArgAction::SetTrue)]
+        force: bool,
+    },
+    /// List the saved sources
+    #[command(alias = "ls")]
+    List,
+    /// Forget a saved source
+    #[command(alias = "rm")]
+    Remove {
+        /// Name of the source to remove
+        name: String,
+    },
+    /// Show one saved source and the GitHub location it resolves to
+    Show {
+        /// Name of the source to show
+        name: String,
+    },
 }
 
 impl Command {
@@ -113,7 +153,7 @@ impl Command {
             | Self::List {
                 agents, all_agents, ..
             } => (agents, all_agents),
-            Self::Serve => return Ok(None),
+            Self::Serve | Self::Source { .. } => return Ok(None),
         };
 
         AgentSelection::parse(agents, *all_agents).map(Some)
@@ -245,6 +285,69 @@ mod tests {
     #[test]
     fn serve_targets_no_agents() {
         let cli = parse(&["serve"]).expect("arguments should parse");
+        assert!(cli.command.agent_selection().unwrap().is_none());
+    }
+
+    const URL: &str = "https://github.com/anthropics/skills/tree/main/skills";
+
+    #[test]
+    fn source_add_takes_a_name_and_a_url() {
+        let cli = parse(&["source", "add", "anthropic", URL]).expect("arguments should parse");
+        let Command::Source {
+            action: SourceCommand::Add { name, url, force },
+        } = cli.command
+        else {
+            panic!("expected a source add command");
+        };
+
+        assert_eq!(name, "anthropic");
+        assert_eq!(url, URL);
+        assert!(!force);
+    }
+
+    #[test]
+    fn source_add_accepts_force() {
+        let cli =
+            parse(&["source", "add", "anthropic", URL, "--force"]).expect("arguments should parse");
+        let Command::Source {
+            action: SourceCommand::Add { force, .. },
+        } = cli.command
+        else {
+            panic!("expected a source add command");
+        };
+
+        assert!(force);
+    }
+
+    #[test]
+    fn source_list_and_remove_have_short_aliases() {
+        assert!(matches!(
+            parse(&["source", "ls"]).unwrap().command,
+            Command::Source {
+                action: SourceCommand::List
+            }
+        ));
+
+        let Command::Source {
+            action: SourceCommand::Remove { name },
+        } = parse(&["source", "rm", "anthropic"]).unwrap().command
+        else {
+            panic!("expected a source remove command");
+        };
+        assert_eq!(name, "anthropic");
+    }
+
+    #[test]
+    fn source_subcommands_require_their_arguments() {
+        assert!(parse(&["source"]).is_err());
+        assert!(parse(&["source", "add", "anthropic"]).is_err());
+        assert!(parse(&["source", "remove"]).is_err());
+        assert!(parse(&["source", "show"]).is_err());
+    }
+
+    #[test]
+    fn source_targets_no_agents() {
+        let cli = parse(&["source", "list"]).expect("arguments should parse");
         assert!(cli.command.agent_selection().unwrap().is_none());
     }
 }

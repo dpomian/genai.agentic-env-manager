@@ -4,15 +4,18 @@ pub mod github;
 mod installer;
 mod mcp_server;
 mod skill;
+mod sources;
 
 use anyhow::Result;
 use clap::Parser;
 use rmcp::{transport::stdio, ServiceExt};
 use tracing_subscriber::EnvFilter;
 
-use cli::{Cli, Command};
+use cli::{Cli, Command, SourceCommand};
 use config::AgentSelection;
+use github::GitHubPath;
 use mcp_server::SkillInstallerMcpServer;
+use sources::Sources;
 
 #[tokio::main]
 async fn main() {
@@ -107,6 +110,7 @@ async fn run() -> Result<()> {
                 }
             }
         }
+        Command::Source { action } => run_source(action)?,
         Command::Serve => {
             tracing_subscriber::fmt()
                 .with_env_filter(
@@ -126,6 +130,74 @@ async fn run() -> Result<()> {
                 })?;
 
             service.waiting().await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handles the `source` subcommands. Loads `~/.agents/sources.yaml`, applies the
+/// change, and writes it back only for the operations that mutate it.
+fn run_source(action: SourceCommand) -> Result<()> {
+    match action {
+        SourceCommand::Add { name, url, force } => {
+            let mut sources = Sources::load()?;
+            let previous = sources.add(&name, &url, force)?;
+            sources.save()?;
+
+            match previous {
+                Some(old) => println!("Updated source '{name}':\n  was: {old}\n  now: {url}"),
+                None => println!("Added source '{name}' -> {url}"),
+            }
+            println!("Saved to {}", sources.path().display());
+        }
+        SourceCommand::List => {
+            let sources = Sources::load()?;
+
+            if sources.is_empty() {
+                println!("No sources saved.");
+                println!(
+                    "\nSave one with:\n  skill-installer source add <name> \
+                     https://github.com/owner/repo/tree/main/skills"
+                );
+            } else {
+                for (name, url) in sources.iter() {
+                    println!("{name} -> {url}");
+                }
+            }
+        }
+        SourceCommand::Remove { name } => {
+            let mut sources = Sources::load()?;
+            let url = sources.remove(&name)?;
+            sources.save()?;
+
+            println!("Removed source '{name}' -> {url}");
+        }
+        SourceCommand::Show { name } => {
+            let sources = Sources::load()?;
+            let url = sources.get(&name)?;
+
+            println!("{name}");
+            println!("  url:    {url}");
+
+            // A saved URL is validated on add, but a hand-edited file can still
+            // hold a broken one, so report it instead of failing the command.
+            match GitHubPath::parse(url) {
+                Ok(github) => {
+                    println!("  owner:  {}", github.owner);
+                    println!("  repo:   {}", github.repo);
+                    println!("  branch: {}", github.branch);
+                    println!(
+                        "  path:   {}",
+                        if github.path.is_empty() {
+                            "(repository root)"
+                        } else {
+                            &github.path
+                        }
+                    );
+                }
+                Err(err) => println!("  error:  not a usable GitHub URL: {err:#}"),
+            }
         }
     }
 

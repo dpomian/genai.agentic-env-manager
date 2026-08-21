@@ -22,7 +22,9 @@ pub struct SkillInstallerMcpServer {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct InstallSkillParams {
-    /// Local path or GitHub URL (e.g., ./my-skill or https://github.com/owner/repo/tree/branch/path/to/skill)
+    /// Local path, GitHub URL, or "<source>:<skill>" reference into a source
+    /// saved in ~/.agents/sources.yaml (e.g. ./my-skill,
+    /// https://github.com/owner/repo/tree/branch/path/to/skill, or anthropic:pdf)
     pub source: String,
     /// Coding agents to install for, as named in ~/.agents/config.yaml (e.g.
     /// ["kiro"]). Give one or more names, or set all_agents instead. Required
@@ -60,7 +62,8 @@ pub struct ValidateSkillParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UninstallSkillParams {
-    /// Name of the skill to uninstall
+    /// Name of the skill to uninstall, as reported by list_skills. Where the
+    /// skill was installed from does not matter.
     pub name: String,
     /// Coding agents to uninstall from, as named in ~/.agents/config.yaml (e.g.
     /// ["kiro"]). Give one or more names, or set all_agents instead. Required
@@ -129,7 +132,7 @@ impl SkillInstallerMcpServer {
     }
 
     #[tool(
-        description = "Install an agent skill from a local path or GitHub URL. By default copies to ~/.agents/skills and creates symlinks in the coding agent directories configured in ~/.agents/config.yaml. Select agents with agents (one or more configured names, e.g. [\"kiro\"]) or all_agents for every configured agent; one of the two is required. Pass workspace to install at project level instead: the skill is copied into <workspace>/<agent dir> with no symlinks, and all_agents is not allowed there."
+        description = "Install an agent skill from a local path, a GitHub URL, or a \"<source>:<skill>\" reference into a source saved in ~/.agents/sources.yaml (e.g. anthropic:pdf). By default copies to ~/.agents/skills and creates symlinks in the coding agent directories configured in ~/.agents/config.yaml. Select agents with agents (one or more configured names, e.g. [\"kiro\"]) or all_agents for every configured agent; one of the two is required. Pass workspace to install at project level instead: the skill is copied into <workspace>/<agent dir> with no symlinks, and all_agents is not allowed there."
     )]
     async fn install_skill(
         &self,
@@ -245,7 +248,7 @@ impl ServerHandler for SkillInstallerMcpServer {
             instructions: Some(
                 "Skill Installer MCP Server. Install agent skills to multiple AI coding assistants. \
                 Available tools: \
-                - install_skill: Install a skill from a local path or GitHub URL \
+                - install_skill: Install a skill from a local path, GitHub URL, or <source>:<skill> reference \
                 - validate_skill: Validate that a path contains a valid skill \
                 - uninstall_skill: Uninstall a skill by name \
                 - list_skills: List all installed skills with optional frontmatter"

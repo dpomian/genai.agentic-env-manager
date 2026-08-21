@@ -37,6 +37,10 @@ This command:
 3. Copies the skill to `~/.agents/skills/<skill-name>`
 4. Creates symlinks in the resolved coding agent directories
 
+The positional argument may be a local path, a GitHub `/tree/` URL, or a
+`<source>:<skill>` reference into a saved source — see
+[Install from a Saved Source](#install-from-a-saved-source).
+
 You must say which agents to install for. Either name them with `--agent`
 (short `-a`), repeating the flag for more than one:
 
@@ -127,6 +131,80 @@ symlink. A copy that nothing points at is reclaimed on the next uninstall.
 Unlike `install`, `--all-agents` *is* allowed with `--workspace`, since
 uninstalling only removes what is already there and creates no directories.
 
+#### Manage Skill Sources
+
+A *source* is a GitHub directory that contains skills, saved under a short name
+so you don't have to retype the URL:
+
+```bash
+skill-installer source add anthropic https://github.com/anthropics/skills/tree/main/skills
+skill-installer source list
+skill-installer source show anthropic
+skill-installer source remove anthropic
+```
+
+`list` and `remove` also answer to `ls` and `rm`.
+
+Sources live in `~/.agents/sources.yaml`, separate from `config.yaml`:
+
+```yaml
+sources:
+  anthropic: https://github.com/anthropics/skills/tree/main/skills
+```
+
+The URL must be a GitHub `/tree/` directory URL — it is parsed when you add it,
+so a typo is caught immediately rather than at install time. The path may be
+empty (`.../tree/main`), which means the repository root. `show` prints the
+owner, repo, branch, and path the URL resolves to.
+
+Adding a name that already exists is an error, so a mistyped `add` cannot
+silently repoint a source you rely on. Pass `--force` to repoint it deliberately:
+
+```bash
+skill-installer source add anthropic https://github.com/anthropics/skills/tree/main --force
+```
+
+Set `SKILL_INSTALLER_SOURCES` to keep the file somewhere else.
+
+#### Install from a Saved Source
+
+Once a source is saved, `install` accepts `<source>:<skill>` in place of a URL:
+
+```bash
+skill-installer source add anthropic https://github.com/anthropics/skills/tree/main/skills
+skill-installer install anthropic:pdf -a kiro
+```
+
+The skill name is appended to the source's directory, so `anthropic:pdf` fetches
+`https://github.com/anthropics/skills/tree/main/skills/pdf`. The resolved URL is
+printed before the download. A nested skill works too
+(`anthropic:document/pdf`), and a source pointing at a repository root appends
+directly to it.
+
+Everything else about the install is unchanged — `--agent`, `--all-agents` and
+`--workspace` behave exactly as they do for a URL or a local path.
+
+The three forms are told apart like this:
+
+- anything starting with `http://` or `https://` is a URL, so the `:` in
+  `https://` is never read as a separator;
+- otherwise a `:` means a source reference — unless a file or directory with
+  that literal name exists, in which case the path wins;
+- everything else is a local path.
+
+A reference into a source that is not saved is an error that lists the saved
+sources, and nothing is installed. The skill part must stay inside the source, so
+`..` segments, absolute paths and empty segments are refused.
+
+**Uninstall does not take a reference.** A source only says where a skill was
+fetched from; nothing about it is recorded once the skill is installed. Uninstall
+by name, as shown above:
+
+```bash
+skill-installer install anthropic:pdf -a kiro
+skill-installer uninstall pdf -a kiro
+```
+
 #### Run as MCP Server
 
 ```bash
@@ -177,14 +255,16 @@ Or with an absolute path to the binary:
 
 When running as an MCP server, the following tools are available:
 
-- **install_skill**: Install a skill from a local path or GitHub URL. Select
-  agents with `agents` (an array of configured names) or `all_agents: true`; one
-  of the two is required. Optional `workspace` mirrors the CLI flag for a
-  project-level install.
+- **install_skill**: Install a skill from a local path, a GitHub URL, or a
+  `<source>:<skill>` reference into a saved source. Select agents with `agents`
+  (an array of configured names) or `all_agents: true`; one of the two is
+  required. Optional `workspace` mirrors the CLI flag for a project-level
+  install.
 - **validate_skill**: Validate that `source` contains a valid skill
-- **uninstall_skill**: Uninstall a skill by `name`. Selects agents like
-  `install_skill` (`agents` or `all_agents`); optional `workspace` for a
-  project-level uninstall. Not being installed is a no-op.
+- **uninstall_skill**: Uninstall a skill by `name` only — references are not
+  accepted, since the source is not recorded. Selects agents like `install_skill`
+  (`agents` or `all_agents`); optional `workspace` for a project-level uninstall.
+  Not being installed is a no-op.
 - **list_skills**: List installed skills, with optional `frontmatter`. With
   `workspace` set, returns the project-level skills broken down per coding agent.
 
@@ -263,6 +343,14 @@ Behaviour notes:
 
 Set `SKILL_INSTALLER_CONFIG` to use a config file from another location.
 
+### Skill Sources (`~/.agents/sources.yaml`)
+
+Saved GitHub skill directories, written by `skill-installer source add` and
+`source remove`. Unlike `config.yaml` it is tool-managed and rewritten in full on
+every change, so comments added by hand are not preserved — which is why it is a
+separate file. Override its location with `SKILL_INSTALLER_SOURCES`. See
+[Manage Skill Sources](#manage-skill-sources).
+
 ### Logging
 
 When running as an MCP server, logging is configured via environment variables:
@@ -277,8 +365,10 @@ skill-installer/
 │   ├── main.rs          # Application entry point
 │   ├── cli.rs           # Command-line interface definitions
 │   ├── config.rs        # Coding agent mapping loaded from config.yaml
+│   ├── sources.rs       # Saved skill sources in sources.yaml
 │   ├── installer.rs     # Core installation logic
 │   ├── skill.rs         # Skill validation functions
+│   ├── github.rs        # GitHub URL parsing and skill download
 │   └── mcp_server.rs    # MCP server implementation
 ├── Cargo.toml           # Project configuration and dependencies
 ├── Cargo.lock           # Dependency lock file
@@ -289,8 +379,10 @@ skill-installer/
 
 - **main.rs**: Handles command parsing and delegates to appropriate modules
 - **cli.rs**: Defines the command-line interface using clap
+- **sources.rs**: Reads and writes the saved skill sources
 - **installer.rs**: Implements skill copying and symlink creation logic
 - **skill.rs**: Validates skill directories for required marker files
+- **github.rs**: Parses GitHub URLs and downloads skill directories
 - **mcp_server.rs**: Provides MCP server functionality with tool handlers
 
 ## Dependencies
@@ -302,7 +394,7 @@ skill-installer/
 - **schemars**: JSON schema generation for MCP tool parameters
 - **serde**: Serialization and deserialization framework
 - **serde_json**: JSON support for serde
-- **serde_yaml**: YAML parsing for `config.yaml`
+- **serde_yaml**: YAML parsing for `config.yaml` and `sources.yaml`
 - **tokio**: Async runtime with full feature set
 - **tracing**: Structured logging framework
 - **tracing-subscriber**: Logging subscriber with environment filter support

@@ -1,6 +1,7 @@
-# Skill Installer
+# Agentic Environment Manager (`aem`)
 
-A Rust-based tool for installing agent skills across multiple AI coding assistants. The skill installer copies skills to a centralized location and creates symlinks in various AI assistant directories, making skills available to tools like Kiro, Windsurf, Copilot, and Claude.
+A Rust-based tool for managing the capabilities of AI coding agents: **skills** and
+**MCP servers**, installed across every agent from a single definition. For skills it copies them to a centralized location and creates symlinks in various AI assistant directories, making skills available to tools like Kiro, Windsurf, Copilot, and Claude.
 
 ## Installation
 
@@ -12,23 +13,25 @@ A Rust-based tool for installing agent skills across multiple AI coding assistan
 ### Build from Source
 
 ```bash
-git clone <repository-url>
-cd skill-installer
+git clone https://github.com/dpomian/genai.agentic-env-manager.git
+cd genai.agentic-env-manager
 cargo build --release
 ```
 
-The compiled binary will be available at `target/release/skill-installer`.
+The compiled binary will be available at `target/release/aem`.
+
+The compiled binary will be available at `target/release/aem`.
 
 ## Usage
 
-The skill installer provides two main modes of operation:
+`aem` provides two main modes of operation:
 
 ### Command Line Interface
 
 #### Install a Skill
 
 ```bash
-skill-installer install /path/to/skill/directory --agent kiro
+aem skill install /path/to/skill/directory --agent kiro
 ```
 
 This command:
@@ -45,14 +48,14 @@ You must say which agents to install for. Either name them with `--agent`
 (short `-a`), repeating the flag for more than one:
 
 ```bash
-skill-installer install /path/to/skill -a kiro
-skill-installer install /path/to/skill -a kiro -a claude
+aem skill install /path/to/skill -a kiro
+aem skill install /path/to/skill -a kiro -a claude
 ```
 
 …or ask for every configured agent with `--all-agents`:
 
 ```bash
-skill-installer install /path/to/skill --all-agents
+aem skill install /path/to/skill --all-agents
 ```
 
 `--all-agents` skips agents whose directory does not exist, so you don't get
@@ -72,7 +75,7 @@ Pass `--workspace` (short `-w`) to install into a project instead of your home
 directory:
 
 ```bash
-skill-installer install /path/to/skill -a kiro -w .
+aem skill install /path/to/skill -a kiro -w .
 ```
 
 The path is canonicalized, so relative paths like `.` work. The skill is copied
@@ -91,7 +94,7 @@ You can name several agents for a project-level install, and each gets its own
 self-contained copy:
 
 ```bash
-skill-installer install /path/to/skill -a kiro -a claude -w .
+aem skill install /path/to/skill -a kiro -a claude -w .
 ```
 
 `--all-agents` is **not** allowed with `--workspace`, because a project should
@@ -101,8 +104,8 @@ nothing is written.
 `--workspace` also works with `uninstall` and `list`:
 
 ```bash
-skill-installer list --workspace .
-skill-installer uninstall my-skill -a kiro -w .
+aem skill list --workspace .
+aem skill uninstall my-skill -a kiro -w .
 ```
 
 Project-level and user-level installs are independent: `uninstall --workspace`
@@ -115,9 +118,9 @@ project.
 pass `--all-agents`.
 
 ```bash
-skill-installer uninstall my-skill -a kiro
-skill-installer uninstall my-skill -a kiro -a claude
-skill-installer uninstall my-skill --all-agents
+aem skill uninstall my-skill -a kiro
+aem skill uninstall my-skill -a kiro -a claude
+aem skill uninstall my-skill --all-agents
 ```
 
 Uninstalling a skill that was never installed, or that is not installed for the
@@ -137,11 +140,11 @@ A *source* is a GitHub directory that contains skills, saved under a short name
 so you don't have to retype the URL:
 
 ```bash
-skill-installer source add anthropic https://github.com/anthropics/skills/tree/main/skills
-skill-installer source list
-skill-installer source show anthropic
-skill-installer source browse anthropic
-skill-installer source remove anthropic
+aem skill source add anthropic https://github.com/anthropics/skills/tree/main/skills
+aem skill source list
+aem skill source show anthropic
+aem skill source browse anthropic
+aem skill source remove anthropic
 ```
 
 `list` and `remove` also answer to `ls` and `rm`.
@@ -162,10 +165,10 @@ Adding a name that already exists is an error, so a mistyped `add` cannot
 silently repoint a source you rely on. Pass `--force` to repoint it deliberately:
 
 ```bash
-skill-installer source add anthropic https://github.com/anthropics/skills/tree/main --force
+aem skill source add anthropic https://github.com/anthropics/skills/tree/main --force
 ```
 
-Set `SKILL_INSTALLER_SOURCES` to keep the file somewhere else.
+Set `AEM_SOURCES` to keep the file somewhere else.
 
 #### Browse the Skills in a Source
 
@@ -173,8 +176,8 @@ Set `SKILL_INSTALLER_SOURCES` to keep the file somewhere else.
 before installing one:
 
 ```bash
-skill-installer source browse anthropic
-skill-installer source browse anthropic --frontmatter
+aem skill source browse anthropic
+aem skill source browse anthropic --frontmatter
 ```
 
 Every immediate subdirectory holding a `skill.md` or `SKILL.md` counts as a
@@ -189,14 +192,14 @@ anthropic -> https://github.com/anthropics/skills/tree/main/skills
       name: pdf
       description: ...
 
-19 skills found. Install one with `skill-installer install anthropic:<name> --agent <agent>`.
+19 skills found. Install one with `aem skill install anthropic:<name> --agent <agent>`.
 ```
 
 A GitHub URL can be browsed without saving it first, which is useful for deciding
 whether a source is worth keeping:
 
 ```bash
-skill-installer source browse https://github.com/anthropics/skills/tree/main/skills
+aem skill source browse https://github.com/anthropics/skills/tree/main/skills
 ```
 
 Subdirectories with no skill marker are reported as skipped rather than silently
@@ -212,8 +215,8 @@ Listing costs one GitHub API request per subdirectory, and two with
 Once a source is saved, `install` accepts `<source>:<skill>` in place of a URL:
 
 ```bash
-skill-installer source add anthropic https://github.com/anthropics/skills/tree/main/skills
-skill-installer install anthropic:pdf -a kiro
+aem skill source add anthropic https://github.com/anthropics/skills/tree/main/skills
+aem skill install anthropic:pdf -a kiro
 ```
 
 The skill name is appended to the source's directory, so `anthropic:pdf` fetches
@@ -242,8 +245,8 @@ fetched from; nothing about it is recorded once the skill is installed. Uninstal
 by name, as shown above:
 
 ```bash
-skill-installer install anthropic:pdf -a kiro
-skill-installer uninstall pdf -a kiro
+aem skill install anthropic:pdf -a kiro
+aem skill uninstall pdf -a kiro
 ```
 
 #### Install an MCP Server Across Agents
@@ -254,7 +257,7 @@ agent's own MCP configuration file — translating one generic definition into t
 dialect that agent actually reads.
 
 ```bash
-skill-installer mcp install ./azure-devops.json -a kiro -a devin
+aem mcp install ./azure-devops.json -a kiro -a devin
 ```
 
 The definition is the shape almost every vendor's documentation uses:
@@ -278,15 +281,15 @@ The definition is the shape almost every vendor's documentation uses:
 It can be a path to a `.json` file, inline JSON, or `-` to read stdin:
 
 ```bash
-skill-installer mcp install '{"mcpServers":{"ctx7":{"url":"https://mcp.context7.com/mcp"}}}' -a cursor
-cat def.json | skill-installer mcp install - -a kiro
+aem mcp install '{"mcpServers":{"ctx7":{"url":"https://mcp.context7.com/mcp"}}}' -a cursor
+cat def.json | aem mcp install - -a kiro
 ```
 
 Besides the `mcpServers` wrapper, a bare `{"<name>": {...}}` map works, as does
 VS Code's `servers` wrapper. A single unnamed server object needs `--name`:
 
 ```bash
-skill-installer mcp install '{"command":"npx","args":["-y","pkg"]}' --name my-server -a kiro
+aem mcp install '{"command":"npx","args":["-y","pkg"]}' --name my-server -a kiro
 ```
 
 A bare `"<name>": {...}` fragment is accepted too — the shape you get by copying
@@ -295,7 +298,7 @@ absent. A trailing comma is fine, and several comma-separated entries install
 together:
 
 ```bash
-skill-installer mcp install -a kiro '"chroma2": {
+aem mcp install -a kiro '"chroma2": {
   "command": "uvx",
   "args": ["chroma-mcp", "--client-type", "persistent"],
   "disabled": true
@@ -309,7 +312,7 @@ all installed.
 Use `--dry-run` to see what each agent would get without writing anything:
 
 ```bash
-skill-installer mcp install ./azure-devops.json -a vscode -a codex --dry-run
+aem mcp install ./azure-devops.json -a vscode -a codex --dry-run
 ```
 
 Installing a server that is already configured replaces that entry and reports
@@ -348,9 +351,9 @@ full study these translations encode.
 #### Uninstall and List MCP Servers
 
 ```bash
-skill-installer mcp uninstall azure-devops -a kiro -a devin
-skill-installer mcp list
-skill-installer mcp list -a codex
+aem mcp uninstall azure-devops -a kiro -a devin
+aem mcp list
+aem mcp list -a codex
 ```
 
 Removing a server that is not configured is a **no-op**: it says so and exits
@@ -360,7 +363,7 @@ alone, and an emptied `mcpServers` wrapper is left in place rather than deleted.
 `mcp agents` prints the supported agents and the file each one uses:
 
 ```bash
-skill-installer mcp agents
+aem mcp agents
 ```
 
 #### MCP Servers at Project Level
@@ -369,7 +372,7 @@ skill-installer mcp agents
 user-level one:
 
 ```bash
-skill-installer mcp install ./azure-devops.json -a kiro -a claude -w .
+aem mcp install ./azure-devops.json -a kiro -a claude -w .
 ```
 
 This writes `.kiro/settings/mcp.json` and `.mcp.json` in the project. Naming an
@@ -416,24 +419,24 @@ containing comments, which VS Code tolerates but a JSON rewrite would discard.
 #### Run as MCP Server
 
 ```bash
-skill-installer serve
+aem serve
 ```
 
 > **Note**: Use the subcommand `serve`, not `--serve`.
 
-Starts the skill installer as an MCP (Model Context Protocol) server using stdio transport. This mode allows AI assistants to interact with the skill installer programmatically.
+Starts `aem` as an MCP (Model Context Protocol) server using stdio transport. This mode allows AI assistants to interact with `aem` programmatically.
 
 ### MCP Server Configuration
 
-To use the skill installer as an MCP server with your AI assistant, add the following to your MCP configuration:
+To use `aem` as an MCP server with your AI assistant, add the following to your MCP configuration:
 
 ```json
 {
   "mcpServers": {
-    "skill-installer": {
-      "command": "./target/release/skill-installer",
+    "aem": {
+      "command": "./target/release/aem",
       "args": ["serve"],
-      "cwd": "/path/to/skill-installer"
+      "cwd": "/path/to/genai.agentic-env-manager"
     }
   }
 }
@@ -444,8 +447,8 @@ Or with an absolute path to the binary:
 ```json
 {
   "mcpServers": {
-    "skill-installer": {
-      "command": "/path/to/skill-installer/target/release/skill-installer",
+    "aem": {
+      "command": "/path/to/genai.agentic-env-manager/target/release/aem",
       "args": ["serve"]
     }
   }
@@ -457,7 +460,7 @@ Or with an absolute path to the binary:
 - **Windsurf / Codeium**: `~/.codeium/windsurf/mcp_config.json`
 - **Kiro**: `~/.kiro/settings/mcp.json`
 
-> **Note**: Replace `/path/to/skill-installer` with the actual path where you cloned and built the repository.
+> **Note**: Replace `/path/to/genai.agentic-env-manager` with the actual path where you cloned and built the repository.
 
 ### MCP Server Tools
 
@@ -549,14 +552,14 @@ Behaviour notes:
   directory does not exist (so you don't get directories for tools you don't use).
 - `install` and `uninstall` require one of the two; `list` defaults to every agent.
 
-Set `SKILL_INSTALLER_CONFIG` to use a config file from another location.
+Set `AEM_CONFIG` to use a config file from another location.
 
 ### Skill Sources (`~/.agents/sources.yaml`)
 
-Saved GitHub skill directories, written by `skill-installer source add` and
+Saved GitHub skill directories, written by `aem skill source add` and
 `source remove`. Unlike `config.yaml` it is tool-managed and rewritten in full on
 every change, so comments added by hand are not preserved — which is why it is a
-separate file. Override its location with `SKILL_INSTALLER_SOURCES`. See
+separate file. Override its location with `AEM_SOURCES`. See
 [Manage Skill Sources](#manage-skill-sources).
 
 ### Logging
@@ -568,7 +571,7 @@ When running as an MCP server, logging is configured via environment variables:
 ## Project Structure
 
 ```
-skill-installer/
+genai.agentic-env-manager/
 ├── src/
 │   ├── main.rs          # Application entry point
 │   ├── cli.rs           # Command-line interface definitions

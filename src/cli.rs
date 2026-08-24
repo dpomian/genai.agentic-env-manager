@@ -6,7 +6,11 @@ use clap::{ArgAction, ArgGroup, Parser, Subcommand};
 use crate::config::AgentSelection;
 
 #[derive(Parser)]
-#[command(name = "skill-installer", about = "Install agent skills")]
+#[command(
+    name = "aem",
+    about = "Agentic environment manager: install skills and MCP servers across AI coding agents",
+    version
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -20,15 +24,36 @@ fn agent_selection_group() -> ArgGroup {
         .required(true)
 }
 
+/// The two capability domains — skills and MCP servers — plus running as an MCP
+/// server ourselves.
 #[derive(Subcommand)]
 pub enum Command {
-    /// Install a skill from a local path or GitHub URL
+    /// Install, remove, and list agent skills
+    #[command(alias = "skills")]
+    Skill {
+        #[command(subcommand)]
+        action: SkillCommand,
+    },
+    /// Add or remove an MCP server in each coding agent's own config file
+    Mcp {
+        #[command(subcommand)]
+        action: McpCommand,
+    },
+    /// Run as an MCP server (stdio transport)
+    Serve,
+}
+
+/// The `skill` operations. Skills are copied to `~/.agents/skills` and symlinked
+/// into each agent's directory, as configured in `~/.agents/config.yaml`.
+#[derive(Subcommand)]
+pub enum SkillCommand {
+    /// Install a skill from a local path, a GitHub URL, or a saved source
     #[command(group = agent_selection_group())]
     Install {
         /// Local path, GitHub URL, or <source>:<skill> reference into a saved
         /// source (e.g. ./my-skill,
         /// https://github.com/owner/repo/tree/branch/path/to/skill, or
-        /// anthropic:pdf — see `skill-installer source`)
+        /// anthropic:pdf — see `aem skill source`)
         source: String,
         /// Coding agent to install for, as named in ~/.agents/config.yaml
         /// (e.g. kiro). Repeat to install for several agents at once.
@@ -99,18 +124,33 @@ pub enum Command {
         #[arg(long, short = 'w', value_name = "PATH")]
         workspace: Option<PathBuf>,
     },
-    /// Run as an MCP server (stdio transport)
-    Serve,
-    /// Add or remove an MCP server in each coding agent's own config file
-    Mcp {
-        #[command(subcommand)]
-        action: McpCommand,
-    },
     /// Manage saved skill sources: GitHub directories that contain skills
+    #[command(alias = "src")]
     Source {
         #[command(subcommand)]
         action: SourceCommand,
     },
+}
+
+impl SkillCommand {
+    /// The agent selection for this operation, or `None` for `source`, which
+    /// does not target agents.
+    pub fn agent_selection(&self) -> Result<Option<AgentSelection>> {
+        let (agents, all_agents) = match self {
+            Self::Install {
+                agents, all_agents, ..
+            }
+            | Self::Uninstall {
+                agents, all_agents, ..
+            }
+            | Self::List {
+                agents, all_agents, ..
+            } => (agents, all_agents),
+            Self::Source { .. } => return Ok(None),
+        };
+
+        AgentSelection::parse(agents, *all_agents).map(Some)
+    }
 }
 
 /// The `mcp` operations. These write to each agent's native MCP config file
@@ -129,7 +169,7 @@ pub enum McpCommand {
         #[arg(long, value_name = "NAME")]
         name: Option<String>,
         /// Coding agent to install for (e.g. kiro). Repeat for several. See
-        /// `skill-installer mcp agents` for the supported names.
+        /// `aem mcp agents` for the supported names.
         #[arg(
             long = "agent",
             short = 'a',
@@ -250,45 +290,22 @@ pub enum SourceCommand {
     },
 }
 
-impl Command {
-    /// The agent selection for this command, or `None` for commands that do not
-    /// target agents.
-    pub fn agent_selection(&self) -> Result<Option<AgentSelection>> {
-        let (agents, all_agents) = match self {
-            Self::Install {
-                agents, all_agents, ..
-            }
-            | Self::Uninstall {
-                agents, all_agents, ..
-            }
-            | Self::List {
-                agents, all_agents, ..
-            } => (agents, all_agents),
-            Self::Serve | Self::Source { .. } => return Ok(None),
-            // `mcp` selects agents from its own built-in table, not from
-            // config.yaml, so the nested subcommand resolves it.
-            Self::Mcp { .. } => return Ok(None),
-        };
-
-        AgentSelection::parse(agents, *all_agents).map(Some)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
-        let mut argv = vec!["skill-installer"];
+        let mut argv = vec!["aem"];
         argv.extend_from_slice(args);
         Cli::try_parse_from(argv)
     }
 
     /// The selection a successfully parsed command resolves to.
     fn selection(args: &[&str]) -> AgentSelection {
-        parse(args)
-            .expect("arguments should parse")
-            .command
+        let Command::Skill { action } = parse(args).expect("arguments should parse").command else {
+            panic!("expected a skill command");
+        };
+        action
             .agent_selection()
             .expect("selection should resolve")
             .expect("command targets agents")
@@ -297,7 +314,7 @@ mod tests {
     #[test]
     fn short_agent_flag_selects_one_agent() {
         assert_eq!(
-            selection(&["install", "./my-skill", "-a", "kiro"]),
+            selection(&["skill", "install", "./my-skill", "-a", "kiro"]),
             AgentSelection::one("kiro")
         );
     }
@@ -305,7 +322,7 @@ mod tests {
     #[test]
     fn long_agent_flag_selects_one_agent() {
         assert_eq!(
-            selection(&["install", "./my-skill", "--agent", "kiro"]),
+            selection(&["skill", "install", "./my-skill", "--agent", "kiro"]),
             AgentSelection::one("kiro")
         );
     }
@@ -313,7 +330,15 @@ mod tests {
     #[test]
     fn repeating_the_agent_flag_selects_several_agents() {
         assert_eq!(
-            selection(&["install", "./my-skill", "-a", "kiro", "-a", "claude"]),
+            selection(&[
+                "skill",
+                "install",
+                "./my-skill",
+                "-a",
+                "kiro",
+                "-a",
+                "claude"
+            ]),
             AgentSelection::Named(vec!["kiro".to_string(), "claude".to_string()])
         );
     }
@@ -321,7 +346,7 @@ mod tests {
     #[test]
     fn all_agents_flag_selects_every_agent() {
         assert_eq!(
-            selection(&["install", "./my-skill", "--all-agents"]),
+            selection(&["skill", "install", "./my-skill", "--all-agents"]),
             AgentSelection::All
         );
     }
@@ -329,35 +354,45 @@ mod tests {
     #[test]
     fn legacy_coding_agent_flag_still_works() {
         assert_eq!(
-            selection(&["install", "./my-skill", "--coding-agent", "kiro"]),
+            selection(&["skill", "install", "./my-skill", "--coding-agent", "kiro"]),
             AgentSelection::one("kiro")
         );
         assert_eq!(
-            selection(&["uninstall", "my-skill", "--coding-agent", "all"]),
+            selection(&["skill", "uninstall", "my-skill", "--coding-agent", "all"]),
             AgentSelection::All
         );
     }
 
     #[test]
     fn install_and_uninstall_require_an_agent_selection() {
-        assert!(parse(&["install", "./my-skill"]).is_err());
-        assert!(parse(&["uninstall", "my-skill"]).is_err());
+        assert!(parse(&["skill", "install", "./my-skill"]).is_err());
+        assert!(parse(&["skill", "uninstall", "my-skill"]).is_err());
     }
 
     #[test]
     fn all_agents_and_named_agents_cannot_be_combined() {
         // clap rejects the two flags together before we ever parse the values.
-        let err = parse(&["install", "./my-skill", "-a", "kiro", "--all-agents"])
-            .err()
-            .expect("clap should reject the combination");
+        let err = parse(&[
+            "skill",
+            "install",
+            "./my-skill",
+            "-a",
+            "kiro",
+            "--all-agents",
+        ])
+        .err()
+        .expect("clap should reject the combination");
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
     fn legacy_all_value_combined_with_a_name_is_rejected() {
         // Both arrive through the same arg, so the conflict surfaces on parse.
-        let cli = parse(&["install", "./my-skill", "-a", "all", "-a", "kiro"]).unwrap();
-        let err = cli.command.agent_selection().unwrap_err();
+        let cli = parse(&["skill", "install", "./my-skill", "-a", "all", "-a", "kiro"]).unwrap();
+        let Command::Skill { action } = cli.command else {
+            panic!("expected a skill command");
+        };
+        let err = action.agent_selection().unwrap_err();
         assert!(
             format!("{err}").contains("cannot combine every agent with a named one"),
             "{err}"
@@ -366,13 +401,13 @@ mod tests {
 
     #[test]
     fn list_defaults_to_every_agent() {
-        assert_eq!(selection(&["list"]), AgentSelection::All);
+        assert_eq!(selection(&["skill", "list"]), AgentSelection::All);
     }
 
     #[test]
     fn list_can_be_narrowed_to_named_agents() {
         assert_eq!(
-            selection(&["list", "-a", "kiro"]),
+            selection(&["skill", "list", "-a", "kiro"]),
             AgentSelection::one("kiro")
         );
     }
@@ -380,12 +415,23 @@ mod tests {
     #[test]
     fn workspace_accepts_short_and_long_forms() {
         for args in [
-            ["install", "./my-skill", "-a", "kiro", "-w", "."],
-            ["install", "./my-skill", "-a", "kiro", "--workspace", "."],
+            ["skill", "install", "./my-skill", "-a", "kiro", "-w", "."],
+            [
+                "skill",
+                "install",
+                "./my-skill",
+                "-a",
+                "kiro",
+                "--workspace",
+                ".",
+            ],
         ] {
             let cli = parse(&args).expect("arguments should parse");
-            let Command::Install { workspace, .. } = cli.command else {
-                panic!("expected an install command");
+            let Command::Skill {
+                action: SkillCommand::Install { workspace, .. },
+            } = cli.command
+            else {
+                panic!("expected a skill install command");
             };
             assert_eq!(workspace, Some(PathBuf::from(".")));
         }
@@ -393,22 +439,29 @@ mod tests {
 
     #[test]
     fn the_removed_ws_alias_is_gone() {
-        assert!(parse(&["install", "./my-skill", "-a", "kiro", "--ws", "."]).is_err());
+        assert!(parse(&["skill", "install", "./my-skill", "-a", "kiro", "--ws", "."]).is_err());
     }
 
     #[test]
     fn serve_targets_no_agents() {
-        let cli = parse(&["serve"]).expect("arguments should parse");
-        assert!(cli.command.agent_selection().unwrap().is_none());
+        // `serve` is its own top-level command and takes no agent selection.
+        assert!(matches!(
+            parse(&["serve"]).expect("arguments should parse").command,
+            Command::Serve
+        ));
     }
 
     const URL: &str = "https://github.com/anthropics/skills/tree/main/skills";
 
     #[test]
     fn source_add_takes_a_name_and_a_url() {
-        let cli = parse(&["source", "add", "anthropic", URL]).expect("arguments should parse");
-        let Command::Source {
-            action: SourceCommand::Add { name, url, force },
+        let cli =
+            parse(&["skill", "source", "add", "anthropic", URL]).expect("arguments should parse");
+        let Command::Skill {
+            action:
+                SkillCommand::Source {
+                    action: SourceCommand::Add { name, url, force },
+                },
         } = cli.command
         else {
             panic!("expected a source add command");
@@ -421,10 +474,13 @@ mod tests {
 
     #[test]
     fn source_add_accepts_force() {
-        let cli =
-            parse(&["source", "add", "anthropic", URL, "--force"]).expect("arguments should parse");
-        let Command::Source {
-            action: SourceCommand::Add { force, .. },
+        let cli = parse(&["skill", "source", "add", "anthropic", URL, "--force"])
+            .expect("arguments should parse");
+        let Command::Skill {
+            action:
+                SkillCommand::Source {
+                    action: SourceCommand::Add { force, .. },
+                },
         } = cli.command
         else {
             panic!("expected a source add command");
@@ -436,15 +492,22 @@ mod tests {
     #[test]
     fn source_list_and_remove_have_short_aliases() {
         assert!(matches!(
-            parse(&["source", "ls"]).unwrap().command,
-            Command::Source {
-                action: SourceCommand::List
+            parse(&["skill", "source", "ls"]).unwrap().command,
+            Command::Skill {
+                action: SkillCommand::Source {
+                    action: SourceCommand::List
+                }
             }
         ));
 
-        let Command::Source {
-            action: SourceCommand::Remove { name },
-        } = parse(&["source", "rm", "anthropic"]).unwrap().command
+        let Command::Skill {
+            action:
+                SkillCommand::Source {
+                    action: SourceCommand::Remove { name },
+                },
+        } = parse(&["skill", "source", "rm", "anthropic"])
+            .unwrap()
+            .command
         else {
             panic!("expected a source remove command");
         };
@@ -454,31 +517,42 @@ mod tests {
     #[test]
     fn source_subcommands_require_their_arguments() {
         assert!(parse(&["source"]).is_err());
-        assert!(parse(&["source", "add", "anthropic"]).is_err());
-        assert!(parse(&["source", "remove"]).is_err());
-        assert!(parse(&["source", "show"]).is_err());
+        assert!(parse(&["skill", "source", "add", "anthropic"]).is_err());
+        assert!(parse(&["skill", "source", "remove"]).is_err());
+        assert!(parse(&["skill", "source", "show"]).is_err());
     }
 
     #[test]
     fn source_targets_no_agents() {
-        let cli = parse(&["source", "list"]).expect("arguments should parse");
-        assert!(cli.command.agent_selection().unwrap().is_none());
+        let cli = parse(&["skill", "source", "list"]).expect("arguments should parse");
+        let Command::Skill { action } = cli.command else {
+            panic!("expected a skill command");
+        };
+        assert!(action.agent_selection().unwrap().is_none());
     }
 
     #[test]
     fn source_browse_takes_a_name_and_optional_frontmatter() {
-        let Command::Source {
-            action: SourceCommand::Browse { name, frontmatter },
-        } = parse(&["source", "browse", "anthropic"]).unwrap().command
+        let Command::Skill {
+            action:
+                SkillCommand::Source {
+                    action: SourceCommand::Browse { name, frontmatter },
+                },
+        } = parse(&["skill", "source", "browse", "anthropic"])
+            .unwrap()
+            .command
         else {
             panic!("expected a source browse command");
         };
         assert_eq!(name, "anthropic");
         assert!(!frontmatter);
 
-        let Command::Source {
-            action: SourceCommand::Browse { frontmatter, .. },
-        } = parse(&["source", "browse", "anthropic", "--frontmatter"])
+        let Command::Skill {
+            action:
+                SkillCommand::Source {
+                    action: SourceCommand::Browse { frontmatter, .. },
+                },
+        } = parse(&["skill", "source", "browse", "anthropic", "--frontmatter"])
             .unwrap()
             .command
         else {
@@ -489,9 +563,12 @@ mod tests {
 
     #[test]
     fn source_browse_accepts_a_url_and_has_an_alias() {
-        let Command::Source {
-            action: SourceCommand::Browse { name, .. },
-        } = parse(&["source", "skills", URL]).unwrap().command
+        let Command::Skill {
+            action:
+                SkillCommand::Source {
+                    action: SourceCommand::Browse { name, .. },
+                },
+        } = parse(&["skill", "source", "skills", URL]).unwrap().command
         else {
             panic!("expected a source browse command");
         };
@@ -500,6 +577,6 @@ mod tests {
 
     #[test]
     fn source_browse_requires_a_name() {
-        assert!(parse(&["source", "browse"]).is_err());
+        assert!(parse(&["skill", "source", "browse"]).is_err());
     }
 }

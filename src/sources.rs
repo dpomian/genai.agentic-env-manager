@@ -8,7 +8,7 @@ use crate::config::home_dir;
 use crate::github::GitHubPath;
 
 /// Environment variable used to point at an alternate sources file.
-pub(crate) const SOURCES_ENV_VAR: &str = "SKILL_INSTALLER_SOURCES";
+pub(crate) const SOURCES_ENV_VAR: &str = "AEM_SOURCES";
 
 /// Sources file location relative to the home directory.
 const SOURCES_RELATIVE_PATH: &str = ".agents/sources.yaml";
@@ -17,10 +17,10 @@ const SOURCES_RELATIVE_PATH: &str = ".agents/sources.yaml";
 /// is tool-managed. Unlike `config.yaml`, this file is rewritten on every
 /// `source add` / `source remove`, so hand-written comments would not survive.
 const FILE_HEADER: &str = "\
-# skill-installer skill sources
+# agentic-env-manager skill sources
 #
 # Saved GitHub directories that contain skills. Managed with
-# `skill-installer source add` / `source remove`; this file is rewritten in
+# `aem skill source add` / `source remove`; this file is rewritten in
 # full on every change, so comments added by hand are not preserved.
 ";
 
@@ -142,7 +142,7 @@ impl Sources {
                 bail!(
                     "source '{name}' already exists:\n  {existing}\n\n\
                      Pass --force to repoint it, or remove it first with \
-                     `skill-installer source remove {name}`."
+                     `aem skill source remove {name}`."
                 );
             }
         }
@@ -174,7 +174,7 @@ impl Sources {
         let base = GitHubPath::parse(url).with_context(|| {
             format!(
                 "source '{}' in '{}' is not a usable GitHub URL; fix it with \
-                 `skill-installer source add {} <url> --force`",
+                 `aem skill source add {} <url> --force`",
                 source.trim(),
                 self.path.display(),
                 source.trim()
@@ -215,7 +215,7 @@ impl Sources {
             return anyhow::anyhow!(
                 "unknown source '{name}'; no sources are saved yet\n\n\
                  Save one with:\n\
-                 \x20 skill-installer source add <name> \
+                 \x20 aem skill source add <name> \
                  https://github.com/owner/repo/tree/main/skills"
             );
         }
@@ -236,7 +236,7 @@ impl Sources {
             .join("\n")
     }
 
-    /// The sources file to read and write: `SKILL_INSTALLER_SOURCES` when set,
+    /// The sources file to read and write: `AEM_SOURCES` when set,
     /// otherwise `~/.agents/sources.yaml`.
     fn resolve_path() -> Result<PathBuf> {
         if let Some(path) = std::env::var_os(SOURCES_ENV_VAR) {
@@ -259,9 +259,7 @@ fn validate_name(name: &str) -> Result<String> {
     }
 
     if let Some(bad) = name.chars().find(|c| RESERVED_IN_NAME.contains(c)) {
-        bail!(
-            "source name '{name}' cannot contain '{bad}'; use a plain name such as `anthropic`"
-        );
+        bail!("source name '{name}' cannot contain '{bad}'; use a plain name such as `anthropic`");
     }
 
     if name.starts_with('-') || name.starts_with('.') {
@@ -376,7 +374,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("skill-installer-sources-{label}-{id}"));
+        let dir = std::env::temp_dir().join(format!("aem-sources-{label}-{id}"));
         if dir.exists() {
             fs::remove_dir_all(&dir).unwrap();
         }
@@ -420,7 +418,10 @@ mod tests {
             .to_yaml()
             .unwrap();
 
-        assert!(yaml.starts_with("# skill-installer skill sources"), "{yaml}");
+        assert!(
+            yaml.starts_with("# agentic-env-manager skill sources"),
+            "{yaml}"
+        );
         assert!(yaml.contains(&format!("anthropic: {URL}")), "{yaml}");
     }
 
@@ -464,7 +465,10 @@ mod tests {
 
         let err = sources.add("anthropic", OTHER_URL, false).unwrap_err();
         let message = format!("{err}");
-        assert!(message.contains("source 'anthropic' already exists"), "{message}");
+        assert!(
+            message.contains("source 'anthropic' already exists"),
+            "{message}"
+        );
         assert!(message.contains("--force"), "{message}");
         // The original URL survives the rejected add.
         assert_eq!(sources.get("anthropic").unwrap(), URL);
@@ -540,7 +544,10 @@ mod tests {
         ] {
             let message = format!("{err}");
             assert!(message.contains("unknown source 'nope'"), "{message}");
-            assert!(message.contains(&format!("anthropic -> {URL}")), "{message}");
+            assert!(
+                message.contains(&format!("anthropic -> {URL}")),
+                "{message}"
+            );
             assert!(message.contains("/tmp/sources.yaml"), "{message}");
         }
     }
@@ -564,7 +571,8 @@ mod tests {
 
     #[test]
     fn malformed_yaml_is_reported_with_the_file_path() {
-        let err = Sources::from_yaml("sources: [oops\n", Path::new("/tmp/sources.yaml")).unwrap_err();
+        let err =
+            Sources::from_yaml("sources: [oops\n", Path::new("/tmp/sources.yaml")).unwrap_err();
 
         assert!(
             format!("{err:#}").contains("failed to parse sources '/tmp/sources.yaml'"),

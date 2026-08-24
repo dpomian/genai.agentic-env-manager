@@ -16,7 +16,7 @@ use crate::installer;
 use crate::skill;
 
 #[derive(Clone)]
-pub struct SkillInstallerMcpServer {
+pub struct AgenticEnvManagerMcpServer {
     tool_router: ToolRouter<Self>,
 }
 
@@ -124,7 +124,7 @@ fn selection(
 }
 
 #[tool_router]
-impl SkillInstallerMcpServer {
+impl AgenticEnvManagerMcpServer {
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
@@ -239,7 +239,7 @@ impl SkillInstallerMcpServer {
 }
 
 #[tool_handler]
-impl ServerHandler for SkillInstallerMcpServer {
+impl ServerHandler for AgenticEnvManagerMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2025_03_26,

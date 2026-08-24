@@ -12,10 +12,10 @@ use clap::Parser;
 use rmcp::{transport::stdio, ServiceExt};
 use tracing_subscriber::EnvFilter;
 
-use cli::{Cli, Command, McpCommand, SourceCommand};
+use cli::{Cli, Command, McpCommand, SkillCommand, SourceCommand};
 use config::AgentSelection;
 use github::GitHubPath;
-use mcp_server::SkillInstallerMcpServer;
+use mcp_server::AgenticEnvManagerMcpServer;
 use sources::Sources;
 
 #[tokio::main]
@@ -31,12 +31,24 @@ async fn main() {
 async fn run() -> Result<()> {
     let args = Cli::parse();
 
-    // Every agent-targeting command builds its selection the same way, so the
-    // `--agent` / `--all-agents` rules live in one place.
-    let selection = args.command.agent_selection()?;
-
     match args.command {
-        Command::Install {
+        Command::Skill { action } => run_skill(action).await?,
+        Command::Mcp { action } => run_mcp(action)?,
+        Command::Serve => run_serve().await?,
+    }
+
+    Ok(())
+}
+
+/// Handles the `skill` subcommands: installing, removing and listing skills,
+/// plus managing the saved sources they can be installed from.
+async fn run_skill(action: SkillCommand) -> Result<()> {
+    // Every agent-targeting operation builds its selection the same way, so
+    // the `--agent` / `--all-agents` rules live in one place.
+    let selection = action.agent_selection()?;
+
+    match action {
+        SkillCommand::Install {
             source, workspace, ..
         } => {
             let selection = selection.expect("install targets agents");
@@ -44,7 +56,7 @@ async fn run() -> Result<()> {
                 installer::install_from_source(&source, &selection, workspace.as_deref()).await?;
             println!("Skill '{}' installed successfully.", skill_name);
         }
-        Command::Uninstall {
+        SkillCommand::Uninstall {
             name, workspace, ..
         } => {
             let selection = selection.expect("uninstall targets agents");
@@ -67,7 +79,7 @@ async fn run() -> Result<()> {
                 println!("Skill '{}' uninstalled successfully.", name);
             }
         }
-        Command::List {
+        SkillCommand::List {
             frontmatter,
             workspace,
             ..
@@ -111,29 +123,31 @@ async fn run() -> Result<()> {
                 }
             }
         }
-        Command::Source { action } => run_source(action).await?,
-        Command::Mcp { action } => run_mcp(action)?,
-        Command::Serve => {
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    EnvFilter::from_default_env().add_directive(tracing::Level::DEBUG.into()),
-                )
-                .with_writer(std::io::stderr)
-                .with_ansi(false)
-                .init();
-
-            tracing::info!("Starting Skill Installer MCP Server");
-
-            let service = SkillInstallerMcpServer::new()
-                .serve(stdio())
-                .await
-                .inspect_err(|e| {
-                    tracing::error!("serving error: {:?}", e);
-                })?;
-
-            service.waiting().await?;
-        }
+        SkillCommand::Source { action } => run_source(action).await?,
     }
+
+    Ok(())
+}
+
+/// Runs this tool itself as an MCP server over stdio, so an assistant can
+/// drive it programmatically.
+async fn run_serve() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::DEBUG.into()))
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
+
+    tracing::info!("Starting agentic-env-manager MCP server");
+
+    let service = AgenticEnvManagerMcpServer::new()
+        .serve(stdio())
+        .await
+        .inspect_err(|e| {
+            tracing::error!("serving error: {:?}", e);
+        })?;
+
+    service.waiting().await?;
 
     Ok(())
 }
@@ -159,7 +173,7 @@ async fn run_source(action: SourceCommand) -> Result<()> {
             if sources.is_empty() {
                 println!("No sources saved.");
                 println!(
-                    "\nSave one with:\n  skill-installer source add <name> \
+                    "\nSave one with:\n  aem skill source add <name> \
                      https://github.com/owner/repo/tree/main/skills"
                 );
             } else {
@@ -248,7 +262,7 @@ async fn run_source(action: SourceCommand) -> Result<()> {
 
                 println!();
                 println!(
-                    "{} skill{} found. Install one with `skill-installer install {install_arg} \
+                    "{} skill{} found. Install one with `aem skill install {install_arg} \
                      --agent <agent>`.",
                     listing.skills.len(),
                     if listing.skills.len() == 1 { "" } else { "s" },
@@ -262,7 +276,11 @@ async fn run_source(action: SourceCommand) -> Result<()> {
                 println!(
                     "Skipped {} subdirector{} without a skill marker: {}",
                     listing.skipped.len(),
-                    if listing.skipped.len() == 1 { "y" } else { "ies" },
+                    if listing.skipped.len() == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    },
                     listing.skipped.join(", ")
                 );
             }
@@ -300,7 +318,7 @@ fn run_mcp(action: McpCommand) -> Result<()> {
 
     match action {
         McpCommand::Agents => {
-            println!("Agents that can be configured with `skill-installer mcp`:\n");
+            println!("Agents that can be configured with `aem mcp`:\n");
             println!("{}", mcp_config::agent_listing());
             println!(
                 "\nPaths are relative to your home directory. Aliases such as \

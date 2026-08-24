@@ -1,1 +1,5 @@
 /target
+
+# Repo-analysis artifacts, written into the working tree by tooling runs.
+graph_metadata_*.json
+graph_metrics_*.json

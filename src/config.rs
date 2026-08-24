@@ -6,13 +6,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Environment variable used to point at an alternate config file.
-pub(crate) const CONFIG_ENV_VAR: &str = "SKILL_INSTALLER_CONFIG";
+pub(crate) const CONFIG_ENV_VAR: &str = "AEM_CONFIG";
 
 /// Config file location relative to the home directory.
 const CONFIG_RELATIVE_PATH: &str = ".agents/config.yaml";
 
 /// Written on first run when no config file exists yet.
-const DEFAULT_CONFIG_YAML: &str = r#"# skill-installer configuration
+const DEFAULT_CONFIG_YAML: &str = r#"# agentic-env-manager configuration
 #
 # Maps an --agent value to the directory that receives the skill.
 #

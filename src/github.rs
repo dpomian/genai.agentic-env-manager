@@ -134,7 +134,7 @@ async fn client() -> Result<Client> {
     );
 
     Client::builder()
-        .user_agent("skill-installer")
+        .user_agent("agentic-env-manager")
         .default_headers(headers)
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
@@ -202,7 +202,8 @@ pub async fn list_skills(base: &GitHubPath, include_frontmatter: bool) -> Result
             let name = dir.name.clone();
             let path = base.child(&dir.path);
 
-            tasks.spawn(async move { inspect_dir(&client, &path, name, include_frontmatter).await });
+            tasks
+                .spawn(async move { inspect_dir(&client, &path, name, include_frontmatter).await });
         }
 
         while let Some(joined) = tasks.join_next().await {
@@ -295,7 +296,10 @@ async fn fetch_text(client: &Client, url: &str) -> Result<String> {
         bail!("Failed to download file: {}", response.status());
     }
 
-    response.text().await.context("Failed to read response body")
+    response
+        .text()
+        .await
+        .context("Failed to read response body")
 }
 
 async fn download_directory(client: &Client, github_path: &GitHubPath, dest: &Path) -> Result<()> {

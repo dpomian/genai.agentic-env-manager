@@ -1,7 +1,14 @@
 [package]
-name = "skill-installer"
+name = "agentic-env-manager"
 version = "0.1.0"
 edition = "2021"
+description = "Manage the capabilities of AI coding agents: skills and MCP servers, installed across every agent from one definition"
+repository = "https://github.com/dpomian/genai.agentic-env-manager"
+
+# Short to type, since every invocation starts with it.
+[[bin]]
+name = "aem"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.102"

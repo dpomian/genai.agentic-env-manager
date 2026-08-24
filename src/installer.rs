@@ -586,7 +586,7 @@ mod tests {
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-    /// `SKILL_INSTALLER_CONFIG` is process-global, so only one test may have a
+    /// `AEM_CONFIG` is process-global, so only one test may have a
     /// config installed at a time.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -601,7 +601,7 @@ mod tests {
     /// Creates a unique temp directory for one test case.
     fn temp_dir(label: &str) -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("skill-installer-test-{label}-{id}"));
+        let dir = std::env::temp_dir().join(format!("aem-test-{label}-{id}"));
         if dir.exists() {
             fs::remove_dir_all(&dir).unwrap();
         }

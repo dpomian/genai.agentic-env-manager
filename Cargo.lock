@@ -3,6 +3,25 @@
 version = 4
 
 [[package]]
+name = "agentic-env-manager"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs",
+ "reqwest",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "toml_edit",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1478,25 +1497,6 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
-]
-
-[[package]]
-name = "skill-installer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "dirs",
- "reqwest",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "serde_yaml",
- "tokio",
- "toml_edit",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

@@ -255,18 +255,15 @@ pub fn agent(name: &str) -> Result<&'static AgentMcp> {
         .map(|(_, target)| *target)
         .unwrap_or(&wanted);
 
-    AGENTS
-        .iter()
-        .find(|a| a.name == canonical)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "unknown agent '{name}' for MCP configuration\n\n\
+    AGENTS.iter().find(|a| a.name == canonical).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown agent '{name}' for MCP configuration\n\n\
                  Supported agents:\n{}\n\n\
                  Unlike skills, MCP support is built in rather than read from \
                  config.yaml, because each agent needs its own config dialect.",
-                agent_listing()
-            )
-        })
+            agent_listing()
+        )
+    })
 }
 
 /// Every supported agent, one per line, for `mcp agents` and error messages.
@@ -324,8 +321,17 @@ pub struct GenericServer {
 
 /// Keys that mark an object as a server definition rather than a map of them.
 const SERVER_KEYS: &[&str] = &[
-    "command", "args", "env", "url", "serverUrl", "httpUrl", "headers", "type", "transport",
-    "tools", "disabled",
+    "command",
+    "args",
+    "env",
+    "url",
+    "serverUrl",
+    "httpUrl",
+    "headers",
+    "type",
+    "transport",
+    "tools",
+    "disabled",
 ];
 
 /// Accepts a fragment copied out of the middle of a config file: a bare
@@ -401,9 +407,9 @@ impl GenericServer {
 
         map.iter()
             .map(|(name, definition)| {
-                let object = definition.as_object().ok_or_else(|| {
-                    anyhow::anyhow!("server '{name}' must be a JSON object")
-                })?;
+                let object = definition
+                    .as_object()
+                    .ok_or_else(|| anyhow::anyhow!("server '{name}' must be a JSON object"))?;
                 Self::parse_one(name, object)
             })
             .collect()
@@ -524,7 +530,11 @@ fn first_string_field(
 
 /// Reads an array-of-strings field. Numbers and booleans are stringified, since
 /// vendor examples sometimes write ports and flags unquoted.
-fn string_list(object: &Map<String, Value>, key: &str, server: &str) -> Result<Option<Vec<String>>> {
+fn string_list(
+    object: &Map<String, Value>,
+    key: &str,
+    server: &str,
+) -> Result<Option<Vec<String>>> {
     match object.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Array(items)) => items
@@ -642,7 +652,8 @@ fn codex_warnings(server: &GenericServer) -> Vec<String> {
     }
 
     for (key, header) in &server.headers {
-        let embedded_only = placeholder_var(header).is_none() && !placeholder_vars(header).is_empty();
+        let embedded_only =
+            placeholder_var(header).is_none() && !placeholder_vars(header).is_empty();
         if embedded_only && bearer_placeholder(header).is_none() {
             warnings.push(format!(
                 "header '{key}' mixes text with a placeholder, which Codex cannot expand; \
@@ -705,11 +716,13 @@ pub fn render(server: &GenericServer, dialect: Dialect) -> Rendered {
         if dialect == Dialect::DevinCli {
             entry.insert(
                 "transport".to_string(),
-                Value::String(match server.transport {
-                    Transport::Sse => "sse",
-                    _ => "http",
-                }
-                .to_string()),
+                Value::String(
+                    match server.transport {
+                        Transport::Sse => "sse",
+                        _ => "http",
+                    }
+                    .to_string(),
+                ),
             );
         }
 
@@ -723,7 +736,10 @@ pub fn render(server: &GenericServer, dialect: Dialect) -> Rendered {
         entry.insert(
             "command".to_string(),
             Value::String(translate(
-                server.command.as_deref().expect("a stdio server has a command"),
+                server
+                    .command
+                    .as_deref()
+                    .expect("a stdio server has a command"),
                 dialect,
             )),
         );
@@ -1013,10 +1029,7 @@ fn json_uninstall(path: &Path, dialect: Dialect, name: &str) -> Result<bool> {
     let mut document = read_json(path)?;
     let wrapper = dialect.wrapper_key();
 
-    let Some(servers) = document
-        .get_mut(wrapper)
-        .and_then(Value::as_object_mut)
-    else {
+    let Some(servers) = document.get_mut(wrapper).and_then(Value::as_object_mut) else {
         return Ok(false);
     };
 
@@ -1097,7 +1110,12 @@ fn codex_table(server: &GenericServer) -> toml_edit::Table {
             table["env_http_headers"] = Item::Value(from_env.into());
         }
     } else {
-        table["command"] = value(server.command.as_deref().expect("a stdio server has a command"));
+        table["command"] = value(
+            server
+                .command
+                .as_deref()
+                .expect("a stdio server has a command"),
+        );
 
         if !server.args.is_empty() {
             let mut args = Array::new();
@@ -1240,7 +1258,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("skill-installer-mcp-{label}-{id}"));
+        let dir = std::env::temp_dir().join(format!("aem-mcp-{label}-{id}"));
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();
         }
@@ -1422,17 +1440,18 @@ mod tests {
 
     #[test]
     fn rejects_a_server_with_both_command_and_url() {
-        let err =
-            GenericServer::parse_all(r#"{"a": {"command": "x", "url": "https://e"}}"#, None)
-                .unwrap_err();
-        assert!(format!("{err}").contains("has both 'command' and 'url'"), "{err}");
+        let err = GenericServer::parse_all(r#"{"a": {"command": "x", "url": "https://e"}}"#, None)
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("has both 'command' and 'url'"),
+            "{err}"
+        );
     }
 
     #[test]
     fn rejects_an_unsupported_type() {
-        let err =
-            GenericServer::parse_all(r#"{"a": {"type": "ws", "url": "wss://e"}}"#, None)
-                .unwrap_err();
+        let err = GenericServer::parse_all(r#"{"a": {"type": "ws", "url": "wss://e"}}"#, None)
+            .unwrap_err();
         assert!(format!("{err}").contains("unsupported type 'ws'"), "{err}");
     }
 
@@ -1503,7 +1522,10 @@ mod tests {
     fn windsurf_renames_the_url_field() {
         let server = parse_one(r#"{"a": {"url": "https://e/mcp"}}"#);
 
-        assert_eq!(field(&server, Dialect::Windsurf, "serverUrl"), "https://e/mcp");
+        assert_eq!(
+            field(&server, Dialect::Windsurf, "serverUrl"),
+            "https://e/mcp"
+        );
         assert!(!entry(&server, Dialect::Windsurf).contains_key("url"));
     }
 
@@ -1558,7 +1580,10 @@ mod tests {
         let rendered = render(&server, Dialect::McpServersInferred);
         assert!(!rendered.json.as_object().unwrap().contains_key("tools"));
         assert!(
-            rendered.warnings.iter().any(|w| w.contains("'tools' has no equivalent")),
+            rendered
+                .warnings
+                .iter()
+                .any(|w| w.contains("'tools' has no equivalent")),
             "{:?}",
             rendered.warnings
         );
@@ -1636,7 +1661,10 @@ mod tests {
 
         // Literal values stay in `env`; the placeholder becomes a forwarded name.
         assert!(toml.contains(r#"env_vars = ["AZDO_PAT"]"#), "{toml}");
-        assert!(toml.contains(r#"AZDO_ORG_URL = "https://dev.azure.com/org""#), "{toml}");
+        assert!(
+            toml.contains(r#"AZDO_ORG_URL = "https://dev.azure.com/org""#),
+            "{toml}"
+        );
         assert!(!toml.contains("${AZDO_PAT}"), "{toml}");
         assert!(toml.contains("[mcp_servers.azure-devops]"), "{toml}");
     }
@@ -1648,7 +1676,10 @@ mod tests {
         );
         let toml = preview_toml(&server);
 
-        assert!(toml.contains(r#"bearer_token_env_var = "GH_PAT""#), "{toml}");
+        assert!(
+            toml.contains(r#"bearer_token_env_var = "GH_PAT""#),
+            "{toml}"
+        );
         assert!(!toml.contains("${GH_PAT}"), "{toml}");
     }
 
@@ -1659,28 +1690,30 @@ mod tests {
         );
         let toml = preview_toml(&server);
 
-        assert!(toml.contains(r#"env_http_headers = { X-Key = "KEY" }"#), "{toml}");
+        assert!(
+            toml.contains(r#"env_http_headers = { X-Key = "KEY" }"#),
+            "{toml}"
+        );
         assert!(toml.contains(r#"http_headers = { X-Lit = "v" }"#), "{toml}");
     }
 
     #[test]
     fn codex_warns_about_a_placeholder_it_cannot_express() {
-        let server = parse_one(
-            r#"{"a": {"command": "x", "env": {"DSN": "postgres://${USER}@host"}}}"#,
-        );
+        let server =
+            parse_one(r#"{"a": {"command": "x", "env": {"DSN": "postgres://${USER}@host"}}}"#);
         let warnings = render(&server, Dialect::Codex).warnings;
 
         assert!(
-            warnings.iter().any(|w| w.contains("mixes text with a placeholder")),
+            warnings
+                .iter()
+                .any(|w| w.contains("mixes text with a placeholder")),
             "{warnings:?}"
         );
     }
 
     #[test]
     fn codex_renders_tools_and_the_disable_switch() {
-        let server = parse_one(
-            r#"{"a": {"command": "x", "tools": ["open"], "disabled": true}}"#,
-        );
+        let server = parse_one(r#"{"a": {"command": "x", "tools": ["open"], "disabled": true}}"#);
         let toml = preview_toml(&server);
 
         assert!(toml.contains(r#"enabled_tools = ["open"]"#), "{toml}");
@@ -1778,7 +1811,10 @@ mod tests {
         std::fs::write(&path, original).unwrap();
 
         let err = read_json(&path).unwrap_err();
-        assert!(format!("{err:#}").contains("may contain comments"), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("may contain comments"),
+            "{err:#}"
+        );
         // The file is untouched.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
@@ -1811,7 +1847,10 @@ mod tests {
         assert!(text.contains("[mcp_servers.existing]"), "{text}");
         assert!(!text.contains("azure-devops"), "{text}");
 
-        assert!(!toml_uninstall(&path, "azure-devops").unwrap(), "now a no-op");
+        assert!(
+            !toml_uninstall(&path, "azure-devops").unwrap(),
+            "now a no-op"
+        );
     }
 
     // --- the agent table -------------------------------------------------
@@ -1839,7 +1878,11 @@ mod tests {
     #[test]
     fn every_agent_has_a_usable_table_entry() {
         for agent in all_agents() {
-            assert!(!agent.global.is_empty(), "{} has no global path", agent.name);
+            assert!(
+                !agent.global.is_empty(),
+                "{} has no global path",
+                agent.name
+            );
             assert!(
                 !agent.global.starts_with('/') && !agent.global.starts_with('~'),
                 "{} must be home-relative",
@@ -1872,7 +1915,9 @@ mod tests {
         // Claude Code writes .mcp.json at the project root instead of ~/.claude.json.
         let claude = agent("claude").unwrap();
         assert_eq!(
-            claude.config_path(Some(Path::new("/work/project"))).unwrap(),
+            claude
+                .config_path(Some(Path::new("/work/project")))
+                .unwrap(),
             PathBuf::from("/work/project/.mcp.json")
         );
     }

@@ -20,7 +20,75 @@ cargo build --release
 
 The compiled binary will be available at `target/release/aem`.
 
-The compiled binary will be available at `target/release/aem`.
+You can run it straight from there, which is convenient while working on `aem`
+itself because it leaves whatever you have installed untouched:
+
+```bash
+./target/release/aem --help
+cargo run -- skill list    # note the -- separating cargo's args from aem's
+cargo test                 # run the test suite
+```
+
+### Install on Your System
+
+To get `aem` onto your `PATH`, `cargo install` builds an optimized release
+binary and copies it into Cargo's binary directory:
+
+```bash
+cargo install --path .
+```
+
+The binary lands in `~/.cargo/bin/aem` (`%USERPROFILE%\.cargo\bin\aem.exe` on
+Windows). Rustup adds that directory to your `PATH`, so verify with:
+
+```bash
+aem --version
+aem --help
+```
+
+If the shell reports `command not found`, `~/.cargo/bin` is not on your `PATH`.
+Add it to your shell profile — `~/.zshrc` for zsh, the default on macOS:
+
+```bash
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+You can also install straight from the repository without cloning it first:
+
+```bash
+cargo install --git https://github.com/dpomian/genai.agentic-env-manager.git
+```
+
+As an alternative to `cargo install`, copy the release binary anywhere on your
+`PATH` yourself:
+
+```bash
+sudo cp target/release/aem /usr/local/bin/
+```
+
+#### Updating
+
+Re-running the install overwrites the previous binary. `--force` is only needed
+when the version number has not changed, which is typical while developing:
+
+```bash
+git pull
+cargo install --path . --force
+```
+
+#### Uninstalling
+
+`cargo uninstall` takes the **package** name, not the binary name:
+
+```bash
+cargo uninstall agentic-env-manager
+```
+
+This removes only the binary. Your skills in `~/.agents/skills`, the symlinks in
+each agent's directory, and any MCP server entries `aem` wrote all stay where
+they are — clear those with `aem skill uninstall` and `aem mcp uninstall` *before*
+removing the binary if you want them gone too.
 
 ## Usage
 

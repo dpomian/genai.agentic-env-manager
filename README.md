@@ -246,6 +246,173 @@ skill-installer install anthropic:pdf -a kiro
 skill-installer uninstall pdf -a kiro
 ```
 
+#### Install an MCP Server Across Agents
+
+`mcp install` is the mirror image of skill installation: instead of copying files
+into each agent's skills directory, it writes an MCP server entry into each
+agent's own MCP configuration file — translating one generic definition into the
+dialect that agent actually reads.
+
+```bash
+skill-installer mcp install ./azure-devops.json -a kiro -a devin
+```
+
+The definition is the shape almost every vendor's documentation uses:
+
+```json
+{
+  "mcpServers": {
+    "azure-devops": {
+      "command": "npx",
+      "args": ["-y", "@dockndevai/mcp-azure-devops"],
+      "env": {
+        "AZDO_ORG_URL": "https://dev.azure.com/your-org",
+        "AZDO_PAT": "${AZDO_PAT}",
+        "AZDO_MODE": "read-only"
+      }
+    }
+  }
+}
+```
+
+It can be a path to a `.json` file, inline JSON, or `-` to read stdin:
+
+```bash
+skill-installer mcp install '{"mcpServers":{"ctx7":{"url":"https://mcp.context7.com/mcp"}}}' -a cursor
+cat def.json | skill-installer mcp install - -a kiro
+```
+
+Besides the `mcpServers` wrapper, a bare `{"<name>": {...}}` map works, as does
+VS Code's `servers` wrapper. A single unnamed server object needs `--name`:
+
+```bash
+skill-installer mcp install '{"command":"npx","args":["-y","pkg"]}' --name my-server -a kiro
+```
+
+A bare `"<name>": {...}` fragment is accepted too — the shape you get by copying
+one entry straight out of an existing config file, enclosing braces and all
+absent. A trailing comma is fine, and several comma-separated entries install
+together:
+
+```bash
+skill-installer mcp install -a kiro '"chroma2": {
+  "command": "uvx",
+  "args": ["chroma-mcp", "--client-type", "persistent"],
+  "disabled": true
+}'
+```
+
+Agents are selected exactly as for skills — `--agent` / `-a`, repeatable, or
+`--all-agents`. One of the two is required. Several servers in one definition are
+all installed.
+
+Use `--dry-run` to see what each agent would get without writing anything:
+
+```bash
+skill-installer mcp install ./azure-devops.json -a vscode -a codex --dry-run
+```
+
+Installing a server that is already configured replaces that entry and reports
+`Updated` rather than `Added`, so re-running is safe.
+
+#### What Gets Translated
+
+The agents are 90% aligned and 10% incompatible. `mcp install` handles the 10%.
+From the single definition above:
+
+| Agent | Notable difference in what is written |
+| --- | --- |
+| `kiro`, `cursor`, `amazonq`, `claude-desktop` | `mcpServers`, transport inferred, `${AZDO_PAT}` unchanged |
+| `claude` | adds the `"type"` field Claude Code requires on a `url` entry |
+| `vscode` | uses the **`servers`** key, not `mcpServers`; `${env:AZDO_PAT}` |
+| `copilot` | adds `"type"` and the `"tools": ["*"]` allowlist Copilot expects |
+| `windsurf` | a remote server's URL field is `serverUrl` |
+| `devin` | adds `"transport": "http"` alongside `url` |
+| `gemini` | `httpUrl` for streamable HTTP vs `url` for SSE; `$AZDO_PAT` |
+| `codex` | TOML `[mcp_servers.<name>]` with snake_case fields |
+
+Environment placeholders written as `${VAR}` are rewritten into each agent's own
+syntax, including when embedded in a larger value — `"Bearer ${TOKEN}"` becomes
+`"Bearer ${env:TOKEN}"` for Windsurf and `"Bearer $TOKEN"` for Gemini. Codex has
+no string interpolation, so a placeholder is moved to the field that does the
+same job: `env_vars` for environment variables, `bearer_token_env_var` for an
+`Authorization: Bearer` header, and `env_http_headers` for any other header.
+
+Anything an agent genuinely cannot express is reported rather than silently
+dropped — a `tools` allowlist for an agent that has no such field, or a
+placeholder for Copilot CLI, which performs no interpolation at all.
+
+See [docs/mcp-config-across-agents.md](docs/mcp-config-across-agents.md) for the
+full study these translations encode.
+
+#### Uninstall and List MCP Servers
+
+```bash
+skill-installer mcp uninstall azure-devops -a kiro -a devin
+skill-installer mcp list
+skill-installer mcp list -a codex
+```
+
+Removing a server that is not configured is a **no-op**: it says so and exits
+zero. Only the named entry is removed; every other key in the file is left
+alone, and an emptied `mcpServers` wrapper is left in place rather than deleted.
+
+`mcp agents` prints the supported agents and the file each one uses:
+
+```bash
+skill-installer mcp agents
+```
+
+#### MCP Servers at Project Level
+
+`--workspace` (short `-w`) writes the project-level config file instead of the
+user-level one:
+
+```bash
+skill-installer mcp install ./azure-devops.json -a kiro -a claude -w .
+```
+
+This writes `.kiro/settings/mcp.json` and `.mcp.json` in the project. Naming an
+agent that has no documented project-level MCP config (`windsurf`,
+`claude-desktop`) is an error; with `--all-agents` those agents are skipped
+instead, so the flag stays usable.
+
+#### Which File Each Agent Gets
+
+MCP support is **built in** rather than read from `config.yaml`, because each
+agent needs its own config dialect and not just its own directory.
+
+| Agent | User-level file | Project-level file |
+| --- | --- | --- |
+| `kiro` | `~/.kiro/settings/mcp.json` | `.kiro/settings/mcp.json` |
+| `amazonq` | `~/.aws/amazonq/mcp.json` | `.amazonq/mcp.json` |
+| `claude` | `~/.claude.json` | `.mcp.json` |
+| `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` | — |
+| `copilot` | `~/.copilot/mcp-config.json` | `.github/mcp.json` |
+| `vscode` | `~/Library/Application Support/Code/User/mcp.json` | `.vscode/mcp.json` |
+| `cursor` | `~/.cursor/mcp.json` | `.cursor/mcp.json` |
+| `windsurf` | `~/.codeium/windsurf/mcp_config.json` | — |
+| `devin` | `~/.config/devin/mcp_config.json` | `.devin/mcp_config.json` |
+| `gemini` | `~/.gemini/settings.json` | `.gemini/settings.json` |
+| `codex` | `~/.codex/config.toml` | `.codex/config.toml` |
+
+Aliases resolve too: `claude-code`, `amazon-q`, `q`, `copilot-cli`, `code`,
+`copilot-chat`, `cascade`, `devin-cli`, `gemini-cli`, `codex-cli`, `chatgpt`.
+
+Two agents deliberately have no entry, because neither reads a local file: the
+**Devin cloud** MCP marketplace and the **Copilot coding agent**, which is
+configured through repository settings on GitHub.com.
+
+Existing content is preserved. Gemini's `settings.json` keeps its unrelated
+keys, and Codex's `config.toml` keeps its comments and layout, because it is
+edited with a format-preserving TOML parser. A config file that cannot be parsed
+is reported and left untouched rather than rewritten — notably a `.vscode/mcp.json`
+containing comments, which VS Code tolerates but a JSON rewrite would discard.
+
+> **Note**: `mcp install` writes configuration; it never starts or validates the
+> server. Restart or reload the agent to pick up the change, and use that agent's
+> own `/mcp` command to confirm it connected.
+
 #### Run as MCP Server
 
 ```bash
@@ -410,6 +577,7 @@ skill-installer/
 │   ├── installer.rs     # Core installation logic
 │   ├── skill.rs         # Skill validation functions
 │   ├── github.rs        # GitHub URL parsing and skill download
+│   ├── mcp_config.rs    # MCP server config, translated per agent dialect
 │   └── mcp_server.rs    # MCP server implementation
 ├── Cargo.toml           # Project configuration and dependencies
 ├── Cargo.lock           # Dependency lock file
@@ -424,6 +592,8 @@ skill-installer/
 - **installer.rs**: Implements skill copying and symlink creation logic
 - **skill.rs**: Validates skill directories for required marker files
 - **github.rs**: Parses GitHub URLs and downloads skill directories
+- **mcp_config.rs**: Holds the built-in table of agents that support MCP, and
+  translates one generic server definition into each agent's config dialect
 - **mcp_server.rs**: Provides MCP server functionality with tool handlers
 
 ## Dependencies
@@ -437,6 +607,7 @@ skill-installer/
 - **serde_json**: JSON support for serde
 - **serde_yaml**: YAML parsing for `config.yaml` and `sources.yaml`
 - **tokio**: Async runtime with full feature set
+- **toml_edit**: Format-preserving TOML, so editing Codex's `config.toml` keeps its comments
 - **tracing**: Structured logging framework
 - **tracing-subscriber**: Logging subscriber with environment filter support
 

@@ -2,6 +2,7 @@ mod cli;
 mod config;
 pub mod github;
 mod installer;
+mod mcp_config;
 mod mcp_server;
 mod skill;
 mod sources;
@@ -11,7 +12,7 @@ use clap::Parser;
 use rmcp::{transport::stdio, ServiceExt};
 use tracing_subscriber::EnvFilter;
 
-use cli::{Cli, Command, SourceCommand};
+use cli::{Cli, Command, McpCommand, SourceCommand};
 use config::AgentSelection;
 use github::GitHubPath;
 use mcp_server::SkillInstallerMcpServer;
@@ -111,6 +112,7 @@ async fn run() -> Result<()> {
             }
         }
         Command::Source { action } => run_source(action).await?,
+        Command::Mcp { action } => run_mcp(action)?,
         Command::Serve => {
             tracing_subscriber::fmt()
                 .with_env_filter(
@@ -263,6 +265,195 @@ async fn run_source(action: SourceCommand) -> Result<()> {
                     if listing.skipped.len() == 1 { "y" } else { "ies" },
                     listing.skipped.join(", ")
                 );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolves an agent selection against the built-in MCP agent table.
+fn mcp_agents(selection: &AgentSelection) -> Result<Vec<&'static mcp_config::AgentMcp>> {
+    match selection {
+        AgentSelection::All => Ok(mcp_config::all_agents().iter().collect()),
+        AgentSelection::Named(names) => names.iter().map(|n| mcp_config::agent(n)).collect(),
+    }
+}
+
+/// Resolves `--workspace` to an absolute path, so the file paths printed back
+/// are unambiguous.
+fn mcp_workspace(workspace: Option<&std::path::PathBuf>) -> Result<Option<std::path::PathBuf>> {
+    workspace
+        .map(|path| {
+            std::fs::canonicalize(path).map_err(|err| {
+                anyhow::anyhow!("workspace '{}' is not usable: {err}", path.display())
+            })
+        })
+        .transpose()
+}
+
+/// Handles the `mcp` subcommands. Each one translates a single generic server
+/// definition into every selected agent's own dialect and edits that agent's
+/// config file in place, leaving the rest of the file untouched.
+fn run_mcp(action: McpCommand) -> Result<()> {
+    let selection = action.agent_selection()?;
+
+    match action {
+        McpCommand::Agents => {
+            println!("Agents that can be configured with `skill-installer mcp`:\n");
+            println!("{}", mcp_config::agent_listing());
+            println!(
+                "\nPaths are relative to your home directory. Aliases such as \
+                 claude-code, amazon-q and chatgpt also resolve."
+            );
+        }
+        McpCommand::Install {
+            definition,
+            name,
+            workspace,
+            dry_run,
+            ..
+        } => {
+            let selection = selection.expect("mcp install targets agents");
+            let agents = mcp_agents(&selection)?;
+            let workspace = mcp_workspace(workspace.as_ref())?;
+
+            let raw = mcp_config::load_definition(&definition)?;
+            let servers = mcp_config::GenericServer::parse_all(&raw, name.as_deref())?;
+
+            // A dry run only renders, so it can show the translation for agents
+            // whose config file does not exist yet without creating anything.
+            if dry_run {
+                for agent in &agents {
+                    let Ok(path) = agent.config_path(workspace.as_deref()) else {
+                        continue;
+                    };
+                    println!("[{}] {}", agent.name, path.display());
+                    for server in &servers {
+                        let rendered = mcp_config::render(server, agent.dialect);
+                        let entry = serde_json::json!({
+                            agent.dialect.wrapper_key(): { &server.name: rendered.json }
+                        });
+                        let text = match agent.dialect.format() {
+                            mcp_config::Format::Toml => mcp_config::preview_toml(server),
+                            mcp_config::Format::Json => {
+                                serde_json::to_string_pretty(&entry).unwrap_or_default()
+                            }
+                        };
+                        for line in text.lines() {
+                            println!("  {line}");
+                        }
+                        for warning in &rendered.warnings {
+                            println!("  note: {warning}");
+                        }
+                    }
+                    println!();
+                }
+                println!("Dry run: nothing was written.");
+                return Ok(());
+            }
+
+            let mut installed = 0usize;
+            for agent in &agents {
+                for server in &servers {
+                    // With --all-agents, an agent that has no project-level MCP
+                    // config is skipped rather than failing the whole run; a
+                    // named one still errors, so a typo is not silently ignored.
+                    let change = match mcp_config::install(agent, server, workspace.as_deref()) {
+                        Ok(change) => change,
+                        Err(err) if selection.is_all() => {
+                            println!("[{}] skipped: {err:#}", agent.name);
+                            continue;
+                        }
+                        Err(err) => return Err(err),
+                    };
+
+                    let verb = if change.replaced { "Updated" } else { "Added" };
+                    println!(
+                        "[{}] {verb} '{}' in {}",
+                        change.agent,
+                        server.name,
+                        change.path.display()
+                    );
+                    for warning in &change.warnings {
+                        println!("       note: {warning}");
+                    }
+                    installed += 1;
+                }
+            }
+
+            if installed == 0 {
+                println!("Nothing was written.");
+            } else {
+                println!(
+                    "\n{installed} configuration{} updated. Restart or reload the agent to \
+                     pick up the change.",
+                    if installed == 1 { "" } else { "s" }
+                );
+            }
+        }
+        McpCommand::Uninstall {
+            name, workspace, ..
+        } => {
+            let selection = selection.expect("mcp uninstall targets agents");
+            let agents = mcp_agents(&selection)?;
+            let workspace = mcp_workspace(workspace.as_ref())?;
+
+            let mut removed = 0usize;
+            for agent in &agents {
+                match mcp_config::uninstall(agent, &name, workspace.as_deref()) {
+                    Ok(Some(change)) => {
+                        println!(
+                            "[{}] Removed '{name}' from {}",
+                            change.agent,
+                            change.path.display()
+                        );
+                        removed += 1;
+                    }
+                    Ok(None) => {}
+                    // Same rule as install: tolerate a missing project-level
+                    // config only when the whole table was selected.
+                    Err(err) if selection.is_all() => println!("[{}] skipped: {err:#}", agent.name),
+                    Err(err) => return Err(err),
+                }
+            }
+
+            if removed == 0 {
+                println!("MCP server '{name}' is not configured for {selection}; nothing to do.");
+            }
+        }
+        McpCommand::List { workspace, .. } => {
+            let selection = selection.expect("mcp list targets agents");
+            let agents = mcp_agents(&selection)?;
+            let workspace = mcp_workspace(workspace.as_ref())?;
+
+            let mut any = false;
+            for agent in &agents {
+                // An agent with no project-level config simply has nothing to
+                // list in a workspace.
+                let Ok(path) = agent.config_path(workspace.as_deref()) else {
+                    continue;
+                };
+                let servers = mcp_config::list(agent, workspace.as_deref())?;
+
+                if servers.is_empty() && !path.exists() {
+                    continue;
+                }
+
+                println!("[{}] {}", agent.name, path.display());
+                if servers.is_empty() {
+                    println!("  (none)");
+                } else {
+                    any = true;
+                    for server in servers {
+                        println!("  - {server}");
+                    }
+                }
+                println!();
+            }
+
+            if !any {
+                println!("No MCP servers configured for {selection}.");
             }
         }
     }

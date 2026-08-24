@@ -14,5 +14,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9.34"
 tokio = { version = "1", features = ["full"] }
+# Format-preserving TOML, so editing a user's ~/.codex/config.toml keeps their
+# comments and layout intact.
+toml_edit = "0.25.13"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -101,11 +101,112 @@ pub enum Command {
     },
     /// Run as an MCP server (stdio transport)
     Serve,
+    /// Add or remove an MCP server in each coding agent's own config file
+    Mcp {
+        #[command(subcommand)]
+        action: McpCommand,
+    },
     /// Manage saved skill sources: GitHub directories that contain skills
     Source {
         #[command(subcommand)]
         action: SourceCommand,
     },
+}
+
+/// The `mcp` operations. These write to each agent's native MCP config file
+/// (`~/.kiro/settings/mcp.json`, `~/.codex/config.toml`, …) rather than to
+/// anything this tool owns, so one generic definition is translated per agent.
+#[derive(Subcommand)]
+pub enum McpCommand {
+    /// Install an MCP server into the named agents' config files
+    #[command(group = agent_selection_group())]
+    Install {
+        /// The server definition: inline JSON, a path to a .json file, or `-`
+        /// to read stdin. Accepts a `{"mcpServers": {...}}` wrapper, a bare
+        /// `{"<name>": {...}}` map, or a single server object with --name.
+        definition: String,
+        /// Name for the server when the definition is a single unnamed object.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Coding agent to install for (e.g. kiro). Repeat for several. See
+        /// `skill-installer mcp agents` for the supported names.
+        #[arg(
+            long = "agent",
+            short = 'a',
+            action = ArgAction::Append,
+            value_name = "NAME"
+        )]
+        agents: Vec<String>,
+        /// Install for every agent that supports MCP configuration.
+        #[arg(long, action = ArgAction::SetTrue)]
+        all_agents: bool,
+        /// Write the project-level config file instead of the user-level one.
+        #[arg(long, short = 'w', value_name = "PATH")]
+        workspace: Option<PathBuf>,
+        /// Print what would be written for each agent without touching any file.
+        #[arg(long, action = ArgAction::SetTrue)]
+        dry_run: bool,
+    },
+    /// Remove an MCP server from the named agents' config files
+    #[command(group = agent_selection_group())]
+    Uninstall {
+        /// Name of the server to remove, as it appears in `mcp list`.
+        name: String,
+        /// Coding agent to remove it from. Repeat for several.
+        #[arg(
+            long = "agent",
+            short = 'a',
+            action = ArgAction::Append,
+            value_name = "NAME"
+        )]
+        agents: Vec<String>,
+        /// Remove from every agent that supports MCP configuration.
+        #[arg(long, action = ArgAction::SetTrue)]
+        all_agents: bool,
+        /// Remove from the project-level config file instead of the user-level one.
+        #[arg(long, short = 'w', value_name = "PATH")]
+        workspace: Option<PathBuf>,
+    },
+    /// List the MCP servers configured for each agent
+    List {
+        /// Only list this agent. Repeat for several. Defaults to all of them.
+        #[arg(
+            long = "agent",
+            short = 'a',
+            action = ArgAction::Append,
+            value_name = "NAME"
+        )]
+        agents: Vec<String>,
+        /// List every agent. This is the default.
+        #[arg(long, action = ArgAction::SetTrue)]
+        all_agents: bool,
+        /// Read project-level config files instead of the user-level ones.
+        #[arg(long, short = 'w', value_name = "PATH")]
+        workspace: Option<PathBuf>,
+    },
+    /// Show which agents can be configured, and the file each one uses
+    Agents,
+}
+
+impl McpCommand {
+    /// The agent selection for this operation, or `None` for `agents`, which
+    /// targets nothing.
+    pub fn agent_selection(&self) -> Result<Option<AgentSelection>> {
+        let (agents, all_agents) = match self {
+            Self::Install {
+                agents, all_agents, ..
+            }
+            | Self::Uninstall {
+                agents, all_agents, ..
+            }
+            | Self::List {
+                agents, all_agents, ..
+            } => (agents, all_agents),
+            Self::Agents => return Ok(None),
+        };
+
+        AgentSelection::parse(agents, *all_agents).map(Some)
+    }
 }
 
 /// The `source` operations. Sources are saved in `~/.agents/sources.yaml`,
@@ -164,6 +265,9 @@ impl Command {
                 agents, all_agents, ..
             } => (agents, all_agents),
             Self::Serve | Self::Source { .. } => return Ok(None),
+            // `mcp` selects agents from its own built-in table, not from
+            // config.yaml, so the nested subcommand resolves it.
+            Self::Mcp { .. } => return Ok(None),
         };
 
         AgentSelection::parse(agents, *all_agents).map(Some)

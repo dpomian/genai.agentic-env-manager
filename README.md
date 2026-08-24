@@ -7,8 +7,28 @@ A Rust-based tool for managing the capabilities of AI coding agents: **skills** 
 
 ### Prerequisites
 
-- Rust (2021 edition or later)
-- Cargo package manager
+- **Rust** (2021 edition or later) — install it with
+  [rustup](https://rustup.rs), the official toolchain installer, or follow the
+  platform-specific steps on [Install Rust](https://www.rust-lang.org/tools/install).
+  [Other installation methods](https://forge.rust-lang.org/infra/other-installation-methods.html)
+  covers standalone installers and distro packages.
+- **Cargo** — Rust's package manager and build tool. It comes bundled with
+  rustup, so installing Rust as above gives you Cargo as well. If you installed
+  Rust some other way and are missing it, see the
+  [Cargo installation guide](https://doc.rust-lang.org/cargo/getting-started/installation.html).
+
+On macOS and Linux, rustup installs both in one step:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Check that they are on your `PATH` before continuing:
+
+```bash
+rustc --version
+cargo --version
+```
 
 ### Build from Source
 
